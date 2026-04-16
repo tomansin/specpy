@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Datos espectrales
+*.fits
+*.fit
+*.fts
+
+# Resultados de ajustes
+fitted_*.csv
+
+# Entornos virtuales
+.env
+.venv
+env/
+venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
