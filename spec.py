@@ -643,7 +643,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
         if erase_mode:
             msg = "MODO BORRADO - Click en un punto para eliminarlo (r: restaurar todos)"
         elif step is None:
-            msg = "Listo. g: nueva gaussiana"
+            msg = "Listo. d: nueva gaussiana"
             if gaussians:
                 msg += "  |  a: ajustar"
         elif step == 'center':
@@ -1044,7 +1044,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
             print("  Modo borrado activado. Click en un punto para eliminarlo.")
             update_status()
 
-        elif event.key == 'g':
+        elif event.key == 'd':
             if step is None:
                 step = 'center'
                 current_gaussian = []
@@ -1119,7 +1119,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
     print("\n" + "="*60)
     print("MODO AJUSTE DE GAUSSIANAS")
     print("="*60)
-    print("  g         nueva gaussiana (3 clics: centro, FWHM izq, FWHM der)")
+    print("  d         nueva gaussiana (3 clics: centro, FWHM izq, FWHM der)")
     print("  a         ajustar automaticamente todas las gaussianas")
     print("  b         eliminar ultima gaussiana")
     print("  c         limpiar todas las gaussianas")
@@ -1702,13 +1702,13 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
                 activate_window_mode()
             elif event.key == 'enter':
                 apply_window()
-            elif event.key.lower() == 'o':
+            elif event.key.lower() == 'z':
                 reset_view()
             elif event.key.lower() == 'n':
                 # Senalar que se debe abrir la normalizacion despues de cerrar
                 pending[0] = 'normalize'
                 plt.close(fig)
-            elif event.key.lower() == 'g':
+            elif event.key.lower() == 'd':
                 # Senalar que se debe abrir el ajuste de gaussianas despues de cerrar
                 pending[0] = 'fit_gaussians'
                 plt.close(fig)
@@ -1722,10 +1722,15 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
         print("  q         cerrar")
         print("  w         definir ventana de corte (click y drag)")
         print("  Enter     aplicar ventana")
-        print("  o         volver al espectro completo")
+        print("  z         volver al espectro completo")
         print("  n         modo normalizacion")
-        print("  g         modo ajuste de gaussianas")
+        print("  d         modo ajuste de gaussianas")
         print("  x         guardar espectro actual como FITS")
+        print("  --- matplotlib ---")
+        print("  p         modo pan (arrastrar para mover)")
+        print("  o         modo zoom (arrastrar para seleccionar)")
+        print("  scroll    zoom in/out")
+        print("  home      reset vista")
         print("="*50)
 
         plt.show()

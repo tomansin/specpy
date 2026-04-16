@@ -27,11 +27,16 @@ spec.py <archivo.fits> [opciones]
 |-------|--------|
 | `w` | Activar SpanSelector para definir ventana de recorte |
 | `Enter` | Aplicar recorte |
-| `o` | Volver al espectro completo |
+| `z` | Volver al espectro completo |
 | `n` | Abrir modo normalización |
-| `g` | Abrir modo ajuste de gaussianas |
+| `d` | Abrir modo ajuste de gaussianas |
 | `x` | Guardar espectro actual como FITS (`_crop`, `_norm`) |
 | `q` | Cerrar |
+| — | — |
+| `p` | Pan (arrastrar para mover) |
+| `o` | Zoom (arrastrar para seleccionar región) |
+| scroll | Zoom in/out |
+| `home` | Reset vista al estado original |
 
 ---
 
