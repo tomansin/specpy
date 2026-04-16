@@ -505,7 +505,17 @@ def interactive_normalization(wavelength, flux, filename):
             print(f"\n  Finalizando normalizacion ({n_valid} rango(s))")
             plt.close(fig)
 
+    def on_scroll_norm(event):
+        if event.inaxes not in (ax_spec, ax_norm):
+            return
+        factor = 0.85 if event.button == 'up' else 1.0 / 0.85
+        xmin, xmax = ax_spec.get_xlim()
+        xc = event.xdata
+        ax_spec.set_xlim(xc + (xmin - xc) * factor, xc + (xmax - xc) * factor)
+        fig.canvas.draw_idle()
+
     fig.canvas.mpl_connect('key_press_event', on_key)
+    fig.canvas.mpl_connect('scroll_event', on_scroll_norm)
 
     print("\n" + "="*60)
     print("MODO NORMALIZACION")
@@ -1087,8 +1097,18 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
             if step is not None:
                 clear_current_gaussian()
 
+    def on_scroll_gauss(event):
+        if event.inaxes != ax:
+            return
+        factor = 0.85 if event.button == 'up' else 1.0 / 0.85
+        xmin, xmax = ax.get_xlim()
+        xc = event.xdata
+        ax.set_xlim(xc + (xmin - xc) * factor, xc + (xmax - xc) * factor)
+        fig.canvas.draw_idle()
+
     fig.canvas.mpl_connect('button_press_event', on_click)
     fig.canvas.mpl_connect('key_press_event', on_key)
+    fig.canvas.mpl_connect('scroll_event', on_scroll_gauss)
 
     # Si se cargo un JSON, dibujar las gaussianas como vista previa al inicio
     if params_dict:
@@ -1715,7 +1735,17 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             elif event.key.lower() == 'x':
                 save_current()
 
+        def on_scroll(event):
+            if event.inaxes != ax:
+                return
+            factor = 0.85 if event.button == 'up' else 1.0 / 0.85
+            xmin, xmax = ax.get_xlim()
+            xc = event.xdata
+            ax.set_xlim(xc + (xmin - xc) * factor, xc + (xmax - xc) * factor)
+            fig.canvas.draw_idle()
+
         fig.canvas.mpl_connect('key_press_event', on_key)
+        fig.canvas.mpl_connect('scroll_event', on_scroll)
 
         print("\n" + "="*50)
         print("INSTRUCTIONS:")
