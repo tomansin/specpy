@@ -63,87 +63,105 @@ def read_fits_simple(file_name):
 
     Raises
     ------
-    Exception
+    ValueError
         Si el espectro es de tipo MULTISPEC (usar :func:`read_fits_multi` en su lugar).
 
     Notes
     -----
     Si el keyword ``DC-FLAG=1`` está presente, la escala de longitudes de onda
     se trata como logarítmica y se aplica la conversión ``10**wavelength``.
+
+    Para agregar un nuevo instrumento, añadir una entrada en ``_INSTRUMENTS``:
+    - ``'wcs'``            : longitud de onda desde keywords WCS del header.
+    - ``'bintable'``       : longitud de onda y flujo desde hdul[1].data[0][0/1].
+    - ``'wcs_or_bintable'``: intenta WCS primero; si no hay CTYPE1, usa bintable.
+    El valor puede ser el nombre exacto o un fragmento (se usa ``in`` para comparar).
     """
+    # Registro de instrumentos: fragmento_nombre → estrategia
+    # Para agregar uno nuevo, añadir aquí una línea.
+    _INSTRUMENTS = {
+        'REOSC'             : 'wcs',
+        'Reosc'             : 'wcs',
+        'Echelle/SITe2K-1'  : 'wcs',
+        'SOPHIE'            : 'wcs',
+        'FEROS'             : 'wcs_or_bintable',
+        'HARPS'             : 'bintable',
+        'HERMES'            : 'bintable',
+        'SES V4.0'          : 'bintable',
+        'CAFE 2.2'          : 'bintable',
+        'HARPN'             : 'bintable',
+        'UVES'              : 'bintable',
+        'GRACES'            : 'bintable',
+        'FIES'              : 'bintable',
+    }
+    _WCS_CTYPES = {'LINEAR', 'wavelength', 'WAVELENGTH', 'pixel', 'AWAV'}
+
     def _wave_from_header(hdr):
         """Calcula el eje de longitudes de onda a partir de keywords WCS lineales."""
         start, step, num, ref = (hdr['CRVAL1'], hdr['CDELT1'],
                                  hdr['NAXIS1'], hdr['CRPIX1'])
         wave = (np.arange(num, dtype=float) + 1 - ref) * step + start
-        if 'DC-FLAG' in hdr and hdr['DC-FLAG'] == 1:
+        if hdr.get('DC-FLAG') == 1:
             wave = 10.0 ** wave
         return wave
 
+    def _read_bintable(hdul):
+        data = hdul[0].data
+        if data is not None:
+            return data[0], data[1]
+        else:
+            data = hdul[1].data
+            return data[0][0], data[0][1]
+     
+        
     with fits.open(file_name) as hdul:
-
         hdul[0].verify('fix')
         header = hdul[0].header
+        
+        if header.get('CTYPE1') == 'MULTISPE':
+            raise ValueError("This spectrum is MULTISPEC")
 
-        if 'CTYPE1' in header.keys():
-            if header['CTYPE1'] == 'MULTISPE':
-                raise Exception("This spectrum is MULTISPEC")
-
-        try:
-            instrument = header['INSTRUME']
-
-            reosc = ['REOSC', 'Reosc']
-            if any(x in instrument for x in reosc):
-
-                try:
-                    flux = hdul[0].data
-                except Exception:
-                    print('El flujo no está en la primera extesión')
-
-                if header['CTYPE1'] in ['LINEAR', 'wavelength', 'WAVELENGTH', 'pixel', 'AWAV']:
-                    return header, _wave_from_header(header), flux
-
-            elif instrument == 'FEROS':
-
-                try:
-                    flux = hdul[0].data
-                except Exception:
-                    print('El flujo no está en la primera extesión')
-
-                if header['CTYPE1'] in ['WAVELENGTH']:
-                    return header, _wave_from_header(header), flux
-
-            elif instrument == 'Echelle/SITe2K-1':
-
-                try:
-                    flux = hdul[0].data
-                except Exception:
-                    print('El flujo no está en la primera extesión')
-
-                if header['CTYPE1'] in ['WAVELENGTH']:
-                    return header, _wave_from_header(header), flux
-
-            elif instrument == 'HARPS':
-
-                # Todo está en la segunda extensión cómo BINTABLE
-                data = hdul[1].data
-                return header, data[0][0], data[0][1]
-
-            elif instrument == 'SOPHIE':
-
-                try:
-                    flux = hdul[0].data
-                except Exception:
-                    print('El flujo no está en la primera extesión')
-
-                if header['CTYPE1'] in ['AWAV']:
-                    return header, _wave_from_header(header), flux
-
-            else:
-                print(instrument, 'no está implementado en esta función')
+        # Buscar INSTRUME en todas las extensiones si no está en la primaria
+        if 'INSTRUME' not in header:
+            for ext in hdul[1:]:
+                if 'INSTRUME' in ext.header:
+                    header = ext.header
+                    break
                 
-        except Exception:
-            print('No se encotró keyword INSTRUME en header')         
+                # PARA ESPECTROS DE UNWIND
+                if 'COMP' in header:
+                    wave, flux = _read_bintable(hdul)
+                    return header, wave, flux
+                
+            else:
+                print('No se encontró keyword INSTRUME en header')
+                return            
+
+        instrument = header['INSTRUME']
+
+        strategy = next(
+            (s for key, s in _INSTRUMENTS.items() if key in instrument),
+            None
+        )
+
+        if strategy is None:
+            print(f'{instrument} no está implementado en esta función')
+            return
+
+        ctype = header.get('CTYPE1')
+
+        if strategy == 'bintable':
+            wave, flux = _read_bintable(hdul)
+            return header, wave, flux
+
+        if strategy in ('wcs', 'wcs_or_bintable'):
+            if ctype in _WCS_CTYPES:
+                return header, _wave_from_header(header), hdul[0].data
+            elif strategy == 'wcs_or_bintable':
+                wave, flux = _read_bintable(hdul)
+                return header, wave, flux
+            else:
+                raise ValueError('CTYPE1 no coincide con las opciones soportadas')         
             
 def read_fits_multi(file_name, extension=None):
     """

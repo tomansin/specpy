@@ -22,7 +22,7 @@ from specpy.utils import (read_fits_simple, fit_cont_sigma, mask_generator,
 
 # Claves de cabecera FITS aceptadas como tiempo heliocentrizo/baricentrico.
 # Se prueban en orden; se usa la primera que se encuentre.
-HJD_KEYS = ['HJD', 'JD', 'MJD', 'MJD-OBS', 'OHP DRS BJD']
+HJD_KEYS = ['HJD', 'JD', 'MJD', 'MJD-OBS', 'OHP DRS BJD', 'I-HJD', 'MJDATE']
 
 
 def load_spectrum(filename):
@@ -59,18 +59,22 @@ def load_spectrum(filename):
                 hjd_key_used = key
                 break
 
+        # if hjd_value is None:
+        #     print("\nERROR: No HJD or similar keyword found in header")
+        #     print("   Keywords buscadas:", HJD_KEYS)
+        #     print("   Keywords disponibles:")
+        #     for i, key in enumerate(header.keys()):
+        #         if i >= 20:
+        #             # break
+        #         print(f"     {key}: {header[key]}")
+        #     return None, None, None
         if hjd_value is None:
-            print("\nERROR: No HJD or similar keyword found in header")
-            print("   Keywords buscadas:", HJD_KEYS)
-            print("   Keywords disponibles:")
-            for i, key in enumerate(header.keys()):
-                if i >= 20:
-                    break
-                print(f"     {key}: {header[key]}")
-            return None, None, None
-
-        print(f"  HJD ({hjd_key_used}): {hjd_value}")
-        return header, wavelength, flux
+            print("\nWARNING: No HJD or similar keyword found in header")
+            return header, wavelength, flux
+        
+        if hjd_value:
+            print(f"  HJD ({hjd_key_used}): {hjd_value}")
+            return header, wavelength, flux
 
     except FileNotFoundError:
         print(f"Error: File '{filename}' not found")
