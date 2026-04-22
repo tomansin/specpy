@@ -15,8 +15,13 @@ import numpy as np
 import sys
 import os
 import argparse
+import pandas as pd
+import json
+from astropy.io import fits as astropy_fits
+import shutil
 from matplotlib.gridspec import GridSpec
 from matplotlib.widgets import SpanSelector
+from scipy.interpolate import Akima1DInterpolator
 from specpy.utils import (read_fits_simple, fit_cont_sigma, mask_generator,
                           gaussian, fit_lines, find_closest_line, vr, vrerr)
 
@@ -152,8 +157,7 @@ def interactive_normalization(wavelength, flux, filename):
     -------
     norm_flux : np.ndarray o None
     """
-    from scipy.interpolate import Akima1DInterpolator
-
+    
     fig = plt.figure(figsize=(12, 8))
     gs = GridSpec(5, 1)
     ax_spec = fig.add_subplot(gs[:3, 0])
@@ -1260,9 +1264,7 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result):
     result : lmfit.ModelResult
         Resultado del ajuste de gaussianas.
     """
-    import pandas as pd
-    import shutil
-
+    
     csv_filename = f"fitted_{linename}.csv"
 
     # Informacion general
@@ -1470,8 +1472,7 @@ def save_spectrum_fits(out_path, header, wavelength, flux):
     flux : np.ndarray
         Flujo del espectro a guardar.
     """
-    from astropy.io import fits as astropy_fits
-
+    
     new_header = header.copy()
 
     # Eliminar claves que no corresponden a un espectro 1D
@@ -1875,7 +1876,6 @@ def main():
 
     params_dict = None
     if args.params:
-        import json
         try:
             with open(args.params, 'r') as f:
                 params_dict = json.load(f)
