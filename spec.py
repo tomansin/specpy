@@ -751,9 +751,9 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
     def build_manual_params():
         """
         Construye el dict de parametros lmfit a partir de las gaussianas
-        definidas manualmente, aplicando una tolerancia del 100% como limites.
+        definidas manualmente, aplicando una tolerancia del 50% como limites.
         """
-        tol = 1
+        tol = 0.5
         fit_params = {}
         for i, (center, amplitude, fwhm_val) in enumerate(gaussians, 1):
             prefix = f'g{i}_'
@@ -808,7 +808,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
         # Sin JSON: solo manuales
         if not params_dict:
             if n_manual == 0:
-                print("  Primero define al menos una gaussiana con 'g'.")
+                print("  Primero define al menos una gaussiana con 'd'.")
                 return None
             return build_manual_params()
 
@@ -854,8 +854,13 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
                 if param in jg and not jg[param].get('vary', True):
                     # Parametro fijo en el JSON: respetar el valor del JSON
                     combined[f'{prefix}{param}'] = jg[param]
+                elif param in jg:
+                    # Parametro libre: valor manual como estimacion inicial,
+                    # pero se respetan min, max y vary del JSON
+                    entry = dict(jg[param])
+                    entry['value'] = manual_val
+                    combined[f'{prefix}{param}'] = entry
                 else:
-                    # Parametro libre: usar valor manual como estimacion inicial
                     combined[f'{prefix}{param}'] = {'value': manual_val}
 
         combined['bkg_c'] = params_dict.get('bkg_c', {'value': 1.0, 'vary': False})
