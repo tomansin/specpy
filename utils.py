@@ -26,6 +26,7 @@ import os
 import numpy as np
 import pandas as pd
 from astropy.io import fits
+from astropy.io.votable import parse as parse_votable
 import logging
 
 from astropy.stats import sigma_clip
@@ -121,6 +122,9 @@ def read_fits_simple(file_name):
         if header.get('CTYPE1') == 'MULTISPE':
             raise ValueError("This spectrum is MULTISPEC")
 
+        if header.get('PROCSPEC') == 'spec.py':
+            return header, _wave_from_header(header), hdul[0].data
+
         # Buscar INSTRUME en todas las extensiones si no está en la primaria
         if 'INSTRUME' not in header:
             for ext in hdul[1:]:
@@ -161,8 +165,93 @@ def read_fits_simple(file_name):
                 wave, flux = _read_bintable(hdul)
                 return header, wave, flux
             else:
-                raise ValueError('CTYPE1 no coincide con las opciones soportadas')         
-            
+                raise ValueError('CTYPE1 no coincide con las opciones soportadas')
+
+
+def read_votable(file_name, spectral_col='spectral', flux_col='flux'):
+    """
+    Lee un espectro desde un archivo VOTable con columnas de eje espectral y flujo.
+
+    Parameters
+    ----------
+    file_name : str
+        Ruta al archivo VOTable.
+    spectral_col : str
+        Nombre de la columna de longitudes de onda (default 'spectral').
+    flux_col : str
+        Nombre de la columna de flujo (default 'flux').
+
+    Returns
+    -------
+    header : astropy.io.fits.Header
+        Cabecera FITS minima (sin claves WCS ni de tiempo).
+    wavelength : numpy.ndarray
+        Array 1D de longitudes de onda en Angstroms.
+    flux : numpy.ndarray
+        Array 1D de flujo.
+
+    Raises
+    ------
+    ValueError
+        Si no se encuentran las columnas esperadas en la tabla.
+    """
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        vot = parse_votable(file_name)
+
+    table = vot.get_first_table()
+    field_names = [f.name for f in table.fields]
+
+    if spectral_col not in field_names:
+        raise ValueError(
+            f"Columna '{spectral_col}' no encontrada. Columnas disponibles: {field_names}"
+        )
+    if flux_col not in field_names:
+        raise ValueError(
+            f"Columna '{flux_col}' no encontrada. Columnas disponibles: {field_names}"
+        )
+
+    arr = table.array
+    wavelength = np.asarray(arr[spectral_col], dtype=float)
+    flux = np.asarray(arr[flux_col], dtype=float)
+
+    # Eliminar NaN/masked
+    mask = np.isfinite(wavelength) & np.isfinite(flux)
+    wavelength = wavelength[mask]
+    flux = flux[mask]
+
+    # Ordenar por longitud de onda (las VOTable no siempre vienen ordenadas)
+    order = np.argsort(wavelength)
+    wavelength = wavelength[order]
+    flux = flux[order]
+
+    # Cabecera FITS minima para compatibilidad con el resto del pipeline
+    header = fits.Header()
+    header['SIMPLE'] = True
+    header['NAXIS'] = 1
+    header['NAXIS1'] = len(wavelength)
+    header['ORIGIN'] = 'VOTable'
+    header['VOTFILE'] = os.path.basename(file_name)
+
+    # Extraer metadatos del VOTable; mapear ssa_dateObs -> MJD-OBS explicitamente
+    for param in list(vot.params) + list(table.params):
+        name_lower = param.name.lower()
+        if name_lower == 'ssa_dateobs' and param.value not in ('', None):
+            try:
+                header['MJD-OBS'] = float(param.value)
+            except (TypeError, ValueError):
+                pass
+            continue
+        key = param.name.upper()[:8]
+        try:
+            header[key] = param.value
+        except Exception:
+            pass
+
+    return header, wavelength, flux
+
+
 def read_fits_multi(file_name, extension=None):
     """
     Lee archivos FITS con datos MULTISPEC de instrumentos específicos.

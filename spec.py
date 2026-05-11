@@ -1,4 +1,4 @@
-#!/home/tansin/miniconda3/envs/spec/bin/python
+#!/home/tansin/.conda/envs/spec/bin/python
 # -*- coding: utf-8 -*-
 """
 spec.py - Visualizador interactivo de espectros estelares en formato FITS.
@@ -22,8 +22,9 @@ import shutil
 from matplotlib.gridspec import GridSpec
 from matplotlib.widgets import SpanSelector
 from scipy.interpolate import Akima1DInterpolator
-from specpy.utils import (read_fits_simple, fit_cont_sigma, mask_generator,
-                          gaussian, fit_lines, find_closest_line, vr, vrerr)
+from specpy.utils import (read_fits_simple, read_votable, fit_cont_sigma,
+                          mask_generator, gaussian, fit_lines,
+                          find_closest_line, vr, vrerr)
 
 # Claves de cabecera FITS aceptadas como tiempo heliocentrizo/baricentrico.
 # Se prueban en orden; se usa la primera que se encuentre.
@@ -49,9 +50,21 @@ def load_spectrum(filename):
     flux : np.ndarray o None
         Devuelve (None, None, None) si hay error de lectura o falta la clave HJD.
     """
+    def _is_votable(path):
+        """Detecta si el archivo es XML/VOTable leyendo los primeros bytes."""
+        try:
+            with open(path, 'rb') as fh:
+                return fh.read(5).lstrip(b'\xef\xbb\xbf') [:1] == b'<'
+        except OSError:
+            return False
+
     try:
-        header, wavelength, flux = read_fits_simple(filename)
-        print(f"LOADED SPECTRUM FROM {filename}")
+        if _is_votable(filename):
+            header, wavelength, flux = read_votable(filename)
+            print(f"LOADED VOTABLE SPECTRUM FROM {filename}")
+        else:
+            header, wavelength, flux = read_fits_simple(filename)
+            print(f"LOADED SPECTRUM FROM {filename}")
         print(f"  Wavelength range: {wavelength[0]:.2f} - {wavelength[-1]:.2f}")
         print(f"  Number of points: {len(wavelength)}")
 
@@ -64,19 +77,10 @@ def load_spectrum(filename):
                 hjd_key_used = key
                 break
 
-        # if hjd_value is None:
-        #     print("\nERROR: No HJD or similar keyword found in header")
-        #     print("   Keywords buscadas:", HJD_KEYS)
-        #     print("   Keywords disponibles:")
-        #     for i, key in enumerate(header.keys()):
-        #         if i >= 20:
-        #             # break
-        #         print(f"     {key}: {header[key]}")
-        #     return None, None, None
         if hjd_value is None:
             print("\nWARNING: No HJD or similar keyword found in header")
             return header, wavelength, flux
-        
+
         if hjd_value:
             print(f"  HJD ({hjd_key_used}): {hjd_value}")
             return header, wavelength, flux
@@ -291,8 +295,16 @@ def interactive_normalization(wavelength, flux, filename):
             print(f"  Error Akima: {e}")
             return None
 
-    def update_display():
-        """Recalcula el continuo y actualiza ambos paneles."""
+    def update_display(preserve_view=False):
+        """Recalcula el continuo y actualiza ambos paneles.
+
+        preserve_view : si True, conserva xlim y ylim de ax_spec (para +/-).
+                        El ylim de ax_norm siempre se recalcula desde los datos.
+        """
+        if preserve_view:
+            saved_xlim      = ax_spec.get_xlim()
+            saved_ylim_spec = ax_spec.get_ylim()
+
         if continuum_line[0] is not None:
             continuum_line[0].remove()
             continuum_line[0] = None
@@ -304,10 +316,9 @@ def interactive_normalization(wavelength, flux, filename):
             wmin_all = min(range_span(r)[0] for r in valid)
             wmax_all = max(range_span(r)[1] for r in valid)
             draw_mask = (wavelength >= wmin_all) & (wavelength <= wmax_all)
-            # label = ('Continuo' if len(valid) == 1 else 'Continuo (Akima)')
             continuum_line[0], = ax_spec.plot(
                 wavelength[draw_mask], continuum[draw_mask],
-                'r-', linewidth=2, alpha=0.9, #label=label
+                'r-', linewidth=2, alpha=0.9,
             )
         ax_spec.legend(loc='best')
 
@@ -320,20 +331,27 @@ def interactive_normalization(wavelength, flux, filename):
                         label='Referencia (1.0)')
         ax_norm.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
 
+        new_ylim_norm = None
         if continuum is not None:
             norm_flux = flux / continuum
             ax_norm.plot(wavelength, norm_flux, 'k-', linewidth=1.5,
                          label='Normalizado')
-            # ylim calculado solo sobre los puntos dentro de rangos
-            range_mask = np.zeros(len(wavelength), dtype=bool)
+            region_mask = np.zeros(len(wavelength), dtype=bool)
             for r in ranges:
                 if r['regions']:
-                    wmin, wmax = range_span(r)
-                    range_mask |= (wavelength >= wmin) & (wavelength <= wmax)
-            if np.any(range_mask):
-                ax_norm.set_ylim(*calculate_smart_ylimits(
-                    norm_flux[range_mask], margin_factor=0.5))
+                    region_mask |= mask_generator(wavelength, r['regions'])
+            if np.any(region_mask):
+                s = np.std(norm_flux[region_mask])
+                s = s if s > 0 else 0.05
+                new_ylim_norm = (1 - 15 * s, 1 + 5 * s)
         ax_norm.legend(loc='best')
+
+        if new_ylim_norm is not None:
+            ax_norm.set_ylim(*new_ylim_norm)
+
+        if preserve_view:
+            ax_spec.set_xlim(saved_xlim)
+            ax_spec.set_ylim(saved_ylim_spec)
 
         fig.canvas.draw_idle()
 
@@ -407,7 +425,7 @@ def interactive_normalization(wavelength, flux, filename):
         print(f"  R{ridx + 1}, region {len(r['regions'])}: "
               f"[{xmin:.2f}, {xmax:.2f}] A")
         refit_range(r, ridx)
-        update_display()
+        update_display(preserve_view=True)
 
     def toggle_selection():
         selection_active[0] = not selection_active[0]
@@ -463,7 +481,7 @@ def interactive_normalization(wavelength, flux, filename):
                 print(f"  Rango {ridx + 1} (vacio) eliminado.")
                 if ranges:
                     activate_range(ranges[-1], len(ranges) - 1)
-                update_display()
+                update_display(preserve_view=True)
                 return
 
             patch = r['region_patches'].pop()
@@ -486,7 +504,7 @@ def interactive_normalization(wavelength, flux, filename):
                       f"Quedan {len(ranges)} rango(s).")
                 if ranges:
                     activate_range(ranges[-1], len(ranges) - 1)
-            update_display()
+            update_display(preserve_view=True)
 
         elif event.key in ('+', '='):
             if ranges:
@@ -495,7 +513,7 @@ def interactive_normalization(wavelength, flux, filename):
                 current_poly_order[0] = r['poly_order']
                 print(f"  Orden R{len(ranges)}: {r['poly_order']}")
                 refit_range(r, len(ranges) - 1)
-                update_display()
+                update_display(preserve_view=True)
 
         elif event.key == '-':
             if ranges:
@@ -504,7 +522,7 @@ def interactive_normalization(wavelength, flux, filename):
                 current_poly_order[0] = r['poly_order']
                 print(f"  Orden R{len(ranges)}: {r['poly_order']}")
                 refit_range(r, len(ranges) - 1)
-                update_display()
+                update_display(preserve_view=True)
 
         elif event.key == 'q':
             if span_selector[0] is not None:
@@ -572,7 +590,7 @@ def interactive_normalization(wavelength, flux, filename):
     return None
 
 
-def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
+def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, vhelio=0.0):
     """
     Interfaz grafica para ajustar gaussianas a lineas espectrales.
 
@@ -913,6 +931,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None):
             print("="*60)
             print(result.fit_report())
             print("="*60)
+            _print_vr_summary(result, vhelio)
 
             update_status()
 
@@ -1243,29 +1262,33 @@ def _print_vr_summary(result, vhelio):
     return high_vr
 
 
-def save_fit_to_csv(filename, linename, hjd_value, vhelio, result):
+def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=None):
     """
     Guarda los resultados de un ajuste lmfit en un archivo CSV.
 
     Si el archivo ya existe, agrega la nueva fila. Si las columnas no coinciden
     pregunta al usuario como proceder. El nombre del archivo es
-    'fitted_<linename>.csv' en el directorio de trabajo actual.
+    'fitted_<linename>.csv' en el directorio de trabajo actual, o csv_filename
+    si se especifica.
 
     Parameters
     ----------
     filename : str
         Ruta al espectro FITS (solo se guarda el basename).
     linename : str
-        Nombre de la linea espectral; determina el nombre del CSV.
+        Nombre de la linea espectral; determina el nombre del CSV si csv_filename es None.
     hjd_value : float
         Tiempo heliocentrizo/baricentrico del header.
     vhelio : float
         Velocidad heliocentrica (km/s) del header; 0.0 si no esta disponible.
     result : lmfit.ModelResult
         Resultado del ajuste de gaussianas.
+    csv_filename : str o None
+        Nombre del archivo CSV de salida. Si es None se usa 'fitted_<linename>.csv'.
     """
-    
-    csv_filename = f"fitted_{linename}.csv"
+
+    if csv_filename is None:
+        csv_filename = f"fitted_{linename}.csv"
 
     # Informacion general
     data_dict = {
@@ -1483,14 +1506,16 @@ def save_spectrum_fits(out_path, header, wavelength, flux):
     new_header['NAXIS'] = 1
     new_header['NAXIS1'] = len(wavelength)
     new_header['CRPIX1'] = 1  # el primer pixel corresponde a CRVAL1
+    new_header['PROCSPEC'] = 'spec.py'
 
     if 'DC-FLAG' in header and header['DC-FLAG'] == 1:
-        # Escala log-lineal: las claves WCS se guardan en log10(lambda)
+        # Escala log-lineal: las claves WCS se guardan en log10(lambda).
+        # Un recorte de grilla log-lineal sigue siendo log-uniforme, así que
+        # mean(diff(log10)) es exacto (no una aproximación).
         new_header['CRVAL1'] = np.log10(wavelength[0])
         new_header['CDELT1'] = np.mean(np.diff(np.log10(wavelength)))
         new_header['DC-FLAG'] = 1
     else:
-        # Escala lineal: las claves WCS se guardan en angstrom directamente
         new_header['CRVAL1'] = wavelength[0]
         new_header['CDELT1'] = np.mean(np.diff(wavelength))
         if 'DC-FLAG' in new_header:
@@ -1586,9 +1611,11 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             return
         out_path = base + suffix + ext
         if prompt:
-            respuesta = input(f"\n  Guardar espectro como {os.path.basename(out_path)}? [S/n]: ").strip().lower()
-            if respuesta in ('n', 'no'):
+            respuesta = input(f"\n  Guardar espectro como {os.path.basename(out_path)}? [S/n/nombre]: ").strip()
+            if respuesta.lower() in ('n', 'no'):
                 return
+            if respuesta and respuesta.lower() not in ('s', 'si', 'y', 'yes'):
+                out_path = respuesta
         try:
             save_spectrum_fits(out_path, header, current[0], current[1])
             print(f"  Guardado: {out_path}")
@@ -1744,6 +1771,12 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
                 plt.close(fig)
             elif event.key.lower() == 'x':
                 save_current()
+            elif event.key.lower() == 'h':
+                print("\n" + "="*50)
+                print("HEADER")
+                print("="*50)
+                print(repr(header))
+                print("="*50)
 
         def on_scroll(event):
             if event.inaxes != ax:
@@ -1766,6 +1799,7 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
         print("  n         modo normalizacion")
         print("  d         modo ajuste de gaussianas")
         print("  x         guardar espectro actual como FITS")
+        print("  h         imprimir header FITS en terminal")
         print("  --- matplotlib ---")
         print("  p         modo pan (arrastrar para mover)")
         print("  o         modo zoom (arrastrar para seleccionar)")
@@ -1807,7 +1841,7 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
                 save_current(prompt=True)
                 break
         elif action == 'fit_gaussians':
-            fit_result = interactive_gaussian_fitting(current[0], current[1], filename, params_dict)
+            fit_result = interactive_gaussian_fitting(current[0], current[1], filename, params_dict, vhelio)
             if fit_result is not None:
                 high_vr = _print_vr_summary(fit_result, vhelio)
                 if high_vr:
@@ -1832,10 +1866,15 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
                             linename = linename[-4:]
                     except Exception:
                         pass
-                save = input("\n  Guardar parametros del ajuste en CSV? [S/n]: ").strip().lower()
-                if save not in ('n', 'no'):
-                    linename = input(f"  Nombre de la linea [{linename}]: ").strip() or linename
-                    save_fit_to_csv(filename, linename, hjd_value, vhelio, fit_result)
+                default_csv = f"fitted_{linename}.csv"
+                save = input(f"\n  Guardar parametros del ajuste en CSV como {default_csv}? [S/n/nombre]: ").strip()
+                if save.lower() not in ('n', 'no'):
+                    if save and save.lower() not in ('s', 'si', 'y', 'yes'):
+                        csv_out = save
+                    else:
+                        csv_out = default_csv
+                    save_fit_to_csv(filename, linename, hjd_value, vhelio, fit_result,
+                                    csv_filename=csv_out)
             elif fit_result is not None and hjd_value is None:
                 print("  Aviso: no se puede guardar sin HJD en el header.")
             if start_mode is not None:
