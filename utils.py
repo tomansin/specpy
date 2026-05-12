@@ -22,6 +22,7 @@ Clases
 spectrum : Contenedor ligero de espectro (wavelength, flux, header) con método de guardado.
 """
 import os
+import shutil
 
 import numpy as np
 import pandas as pd
@@ -94,6 +95,7 @@ def read_fits_simple(file_name):
         'UVES'              : 'bintable',
         'GRACES'            : 'bintable',
         'FIES'              : 'bintable',
+        'VOT2FITS'          : 'bintable',
     }
     _WCS_CTYPES = {'LINEAR', 'wavelength', 'WAVELENGTH', 'pixel', 'AWAV'}
 
@@ -330,23 +332,13 @@ def read_fits_multi(file_name, extension=None):
             logger.info(f"Dimensiones: {nbands} bandas, {norders} órdenes, {nwave} puntos de longitud de onda")
             
             try:
-                # Verificar instrumento
-                if 'INSTRUME' not in header:
-                    raise KeyError("Keyword 'INSTRUME' no encontrada en el header")
-                
-                instrument = header['INSTRUME'].strip()
-                logger.info(f"Instrumento: {instrument}")
-                
-                # Lista de instrumentos soportados
-                REOSC_VARIANTS = ['REOSC', 'Reosc']
-                ECHELLE_INSTRUMENT = 'Echelle/SITe2K-1'
-                
-                # Verificar si es instrumento REOSC
-                is_reosc = any(variant in instrument for variant in REOSC_VARIANTS)
-                
-                if not (is_reosc or instrument == ECHELLE_INSTRUMENT):
-                    raise ValueError(f"Instrumento '{instrument}' no implementado en esta función")
-                
+                # Verificar instrumento (solo informativo)
+                if 'INSTRUME' in header:
+                    instrument = header['INSTRUME'].strip()
+                    logger.info(f"Instrumento: {instrument}")
+                else:
+                    logger.info("Keyword INSTRUME no encontrada, procesando como MULTISPE genérico")
+
                 # Verificar formato MULTISPEC
                 if 'CTYPE1' not in header:
                     raise KeyError("Keyword 'CTYPE1' no encontrada en el header")
@@ -726,7 +718,7 @@ def fit_lines(wavelength, flux, params=None):
     result : lmfit.ModelResult
         Resultado del ajuste
     """
-    from lmfit.models import GaussianModel, ConstantModel
+    from lmfit.models import GaussianModel, LinearModel
 
     # Parámetros por defecto si no se proporcionan
     if params is None:
@@ -768,8 +760,8 @@ def fit_lines(wavelength, flux, params=None):
     gaussian_indices = sorted(gaussian_params.keys())
     n_gauss = len(gaussian_indices)
     
-    # Crear modelo base (fondo constante)
-    model = ConstantModel(prefix='bkg_')
+    # Crear modelo base (fondo lineal: bkg_intercept + bkg_slope * x)
+    model = LinearModel(prefix='bkg_')
     
     # Añadir gaussianas dinámicamente
     for i in range(1, n_gauss + 1):
@@ -839,9 +831,11 @@ def fit_lines(wavelength, flux, params=None):
         if f'{prefix}sigma' in pars and pars[f'{prefix}sigma'].min is None:
             pars[f'{prefix}sigma'].set(min=0.001)
     
-    # Configurar fondo si no está especificado
-    if 'bkg_c' not in params:
-        pars['bkg_c'].set(value=1.0, vary=True)
+    # Configurar fondo lineal si no está especificado en params
+    if 'bkg_intercept' not in params:
+        pars['bkg_intercept'].set(value=float(np.median(flux)), vary=True)
+    if 'bkg_slope' not in params:
+        pars['bkg_slope'].set(value=0.0, vary=True)
     
     # Opciones de ajuste
     fit_options = params.get('fit_options', {})
@@ -1337,3 +1331,274 @@ def vrerr(lambda_err, lambda0):
         Error en velocidad radial en km/s.
     """
     return c_light / lambda0 * lambda_err
+
+
+def calculate_smart_ylimits(data, central_fraction=0.8, margin_factor=0.1):
+    """
+    Calcula limites Y robustos para graficar espectros con outliers.
+
+    Usa los percentiles 1 y 99 de la fraccion central del array
+    y agrega un margen proporcional al rango.
+
+    Parameters
+    ----------
+    data : np.ndarray
+    central_fraction : float
+    margin_factor : float
+
+    Returns
+    -------
+    ymin, ymax : float
+    """
+    if len(data) == 0:
+        return 0, 1
+
+    n = len(data)
+    lo = max(0, int((1 - central_fraction) / 2 * n))
+    hi = min(n, int((1 + central_fraction) / 2 * n))
+    central = data[lo:hi]
+
+    if len(central) == 0:
+        return np.min(data), np.max(data)
+
+    ymin = np.percentile(data, 1)
+    ymax = np.percentile(central, 99)
+    margin = (ymax - ymin) * margin_factor
+    ymin = max(ymin - margin, 0) if np.min(data) >= 0 else ymin - margin
+    ymax = ymax + margin
+    return ymin, ymax
+
+
+def save_spectrum_fits(out_path, header, wavelength, flux):
+    """
+    Guarda un espectro 1D en formato FITS preservando el WCS del original.
+
+    Actualiza CRVAL1, CDELT1, CRPIX1, NAXIS1 y marca el archivo con
+    PROCSPEC='spec.py' para que read_fits_simple lo reconozca.
+    Maneja escala log-lineal (DC-FLAG=1).
+
+    Parameters
+    ----------
+    out_path : str
+    header : astropy.io.fits.Header
+    wavelength : np.ndarray
+    flux : np.ndarray
+    """
+    new_header = header.copy()
+
+    for key in ['NAXIS2', 'NAXIS3', 'WCSDIM']:
+        if key in new_header:
+            del new_header[key]
+
+    new_header['NAXIS'] = 1
+    new_header['NAXIS1'] = len(wavelength)
+    new_header['CRPIX1'] = 1
+    new_header['PROCSPEC'] = 'spec.py'
+
+    if 'DC-FLAG' in header and header['DC-FLAG'] == 1:
+        new_header['CRVAL1'] = np.log10(wavelength[0])
+        new_header['CDELT1'] = np.mean(np.diff(np.log10(wavelength)))
+        new_header['DC-FLAG'] = 1
+    else:
+        new_header['CRVAL1'] = wavelength[0]
+        new_header['CDELT1'] = np.mean(np.diff(wavelength))
+        if 'DC-FLAG' in new_header:
+            del new_header['DC-FLAG']
+
+    hdu = fits.PrimaryHDU(flux.astype(np.float32), header=new_header)
+    hdu.writeto(out_path, overwrite=True)
+
+
+def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=None):
+    """
+    Guarda los resultados de un ajuste lmfit en un archivo CSV.
+
+    Si el archivo ya existe agrega la nueva fila. Si las columnas no coinciden
+    pregunta al usuario como proceder.
+
+    Parameters
+    ----------
+    filename : str
+    linename : str
+    hjd_value : float
+    vhelio : float
+    result : lmfit.ModelResult
+    csv_filename : str o None
+    """
+    if csv_filename is None:
+        csv_filename = f"fitted_{linename}.csv"
+
+    data_dict = {
+        'filename': [os.path.basename(filename)],
+        'hjd':      [f"{hjd_value:.6f}"],
+        'vhelio':   [f"{vhelio:.6f}"],
+        'chi2_red': [f"{result.redchi:.4f}"],
+        'success':  [result.success],
+    }
+
+    gaussian_params = {}
+    for param_name in result.params:
+        if param_name.startswith('g') and '_' in param_name:
+            parts = param_name.split('_', 1)
+            try:
+                g_num = int(parts[0][1:])
+                param_type = parts[1]
+                if g_num not in gaussian_params:
+                    gaussian_params[g_num] = {}
+                p = result.params[param_name]
+                gaussian_params[g_num][param_type] = {
+                    'value': p.value,
+                    'error': p.stderr if p.stderr is not None else np.nan,
+                    'vary':  p.vary,
+                }
+            except ValueError:
+                continue
+
+    n_gauss = len(gaussian_params)
+    data_dict['n_gauss'] = [n_gauss]
+
+    for i in range(1, n_gauss + 1):
+        if i not in gaussian_params:
+            continue
+        g = gaussian_params[i]
+
+        center_val = g.get('center', {}).get('value', np.nan)
+        center_err = g.get('center', {}).get('error', np.nan)
+        data_dict[f'center{i}']      = [f"{center_val:.4f}"]
+        data_dict[f'center{i}_err']  = [f"{center_err:.4f}" if not np.isnan(center_err) else ""]
+        data_dict[f'center{i}_vary'] = [g.get('center', {}).get('vary', True)]
+
+        sigma_val = g.get('sigma', {}).get('value', np.nan)
+        sigma_err = g.get('sigma', {}).get('error', np.nan)
+        data_dict[f'sigma{i}']      = [f"{sigma_val:.4f}"]
+        data_dict[f'sigma{i}_err']  = [f"{sigma_err:.4f}" if not np.isnan(sigma_err) else ""]
+        data_dict[f'sigma{i}_vary'] = [g.get('sigma', {}).get('vary', True)]
+
+        fwhm_val = sigma_val * 2.3548200 if not np.isnan(sigma_val) else np.nan
+        fwhm_err = sigma_err * 2.3548200 if not np.isnan(sigma_err) else np.nan
+        data_dict[f'fwhm{i}']     = [f"{fwhm_val:.4f}"]
+        data_dict[f'fwhm{i}_err'] = [f"{fwhm_err:.4f}" if not np.isnan(fwhm_err) else ""]
+
+        amp_val = g.get('amplitude', {}).get('value', np.nan)
+        amp_err = g.get('amplitude', {}).get('error', np.nan)
+        data_dict[f'amp{i}']      = [f"{amp_val:.4f}"]
+        data_dict[f'amp{i}_err']  = [f"{amp_err:.4f}" if not np.isnan(amp_err) else ""]
+        data_dict[f'amp{i}_vary'] = [g.get('amplitude', {}).get('vary', True)]
+
+        if not np.isnan(amp_val) and not np.isnan(sigma_val) and sigma_val != 0:
+            height_val = amp_val / (sigma_val * np.sqrt(2 * np.pi))
+            depth_val  = 1 + height_val
+            data_dict[f'height{i}'] = [f"{height_val:.4f}"]
+            data_dict[f'depth{i}']  = [f"{depth_val:.4f}"]
+        else:
+            data_dict[f'height{i}'] = [""]
+            data_dict[f'depth{i}']  = [""]
+
+        ew_val = -amp_val if not np.isnan(amp_val) else np.nan
+        ew_err = amp_err  if not np.isnan(amp_err) else np.nan
+        data_dict[f'ew{i}']     = [f"{ew_val:.4f}" if not np.isnan(ew_val) else ""]
+        data_dict[f'ew{i}_err'] = [f"{ew_err:.4f}" if not np.isnan(ew_err) else ""]
+
+        try:
+            line_info  = find_closest_line(center_val)
+            lambda0    = line_info['lambda_rest']
+            vr_val     = vr(center_val, lambda0, vhelio)
+            vr_err_val = vrerr(center_err, lambda0) if not np.isnan(center_err) else np.nan
+            data_dict[f'line{i}_name']    = [line_info.get('name', '')]
+            data_dict[f'line{i}_lambda0'] = [f"{lambda0:.4f}"]
+            data_dict[f'vr{i}']           = [f"{vr_val:.4f}"]
+            data_dict[f'vr{i}_err']       = [f"{vr_err_val:.4f}" if not np.isnan(vr_err_val) else ""]
+        except Exception:
+            data_dict[f'line{i}_name']    = [""]
+            data_dict[f'line{i}_lambda0'] = [""]
+            data_dict[f'vr{i}']           = [""]
+            data_dict[f'vr{i}_err']       = [""]
+
+    for bkg_key, col_prefix in [('bkg_intercept', 'bkg_intercept'), ('bkg_slope', 'bkg_slope')]:
+        if bkg_key in result.params:
+            p = result.params[bkg_key]
+            data_dict[col_prefix]           = [f"{p.value:.6f}"]
+            data_dict[f'{col_prefix}_err']  = [f"{p.stderr:.6f}" if p.stderr is not None else ""]
+            data_dict[f'{col_prefix}_vary'] = [p.vary]
+        else:
+            data_dict[col_prefix] = data_dict[f'{col_prefix}_err'] = data_dict[f'{col_prefix}_vary'] = [""]
+
+    base_cols = ['filename', 'hjd', 'vhelio', 'chi2_red', 'success', 'n_gauss']
+    gauss_cols = []
+    for i in range(1, n_gauss + 1):
+        gauss_cols.extend([
+            f'center{i}', f'center{i}_err', f'center{i}_vary',
+            f'sigma{i}',  f'sigma{i}_err',  f'sigma{i}_vary',
+            f'fwhm{i}',   f'fwhm{i}_err',
+            f'amp{i}',    f'amp{i}_err',    f'amp{i}_vary',
+            f'height{i}', f'depth{i}',
+            f'ew{i}', f'ew{i}_err',
+            f'line{i}_name', f'line{i}_lambda0', f'vr{i}', f'vr{i}_err',
+        ])
+    all_cols = base_cols + gauss_cols + [
+        'bkg_intercept', 'bkg_intercept_err', 'bkg_intercept_vary',
+        'bkg_slope', 'bkg_slope_err', 'bkg_slope_vary',
+    ]
+    for col in all_cols:
+        if col not in data_dict:
+            data_dict[col] = [""]
+
+    df_new = pd.DataFrame({col: data_dict[col] for col in all_cols})
+
+    if os.path.exists(csv_filename):
+        try:
+            df_existing = pd.read_csv(csv_filename)
+            existing_cols = set(df_existing.columns)
+            new_cols = set(df_new.columns)
+
+            if existing_cols != new_cols:
+                print(f"\n  Aviso: las columnas del CSV existente no coinciden con las nuevas.")
+                print(f"  Columnas existentes: {len(existing_cols)}")
+                print(f"  Columnas nuevas:     {len(new_cols)}")
+                print("  Opciones:")
+                print("    1  agregar de todos modos (puede generar columnas vacias)")
+                print("    2  crear archivo nuevo (backup del existente)")
+                print("    3  cancelar")
+                choice = input("  Eleccion (1-3): ").strip()
+
+                if choice == '1':
+                    merged_cols = sorted(existing_cols.union(new_cols))
+                    for col in merged_cols:
+                        if col not in df_existing.columns:
+                            df_existing[col] = ""
+                        if col not in df_new.columns:
+                            df_new[col] = ""
+                    df_existing = df_existing[merged_cols]
+                    df_new = df_new[merged_cols]
+                    pd.concat([df_existing, df_new], ignore_index=True).to_csv(csv_filename, index=False)
+                    print(f"  Agregado a {csv_filename} (columnas ajustadas).")
+
+                elif choice == '2':
+                    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+                    backup = f"{csv_filename}.backup_{timestamp}"
+                    shutil.copy2(csv_filename, backup)
+                    print(f"  Backup creado: {backup}")
+                    df_new.to_csv(csv_filename, index=False)
+                    print(f"  Nuevo archivo: {csv_filename}")
+
+                else:
+                    print("  Guardado cancelado.")
+                    return
+            else:
+                pd.concat([df_existing, df_new], ignore_index=True).to_csv(csv_filename, index=False)
+                print(f"  Fila agregada a {csv_filename}")
+
+        except Exception as e:
+            print(f"  Error leyendo CSV existente: {e}. Creando nuevo archivo.")
+            df_new.to_csv(csv_filename, index=False)
+            print(f"  Creado: {csv_filename}")
+    else:
+        df_new.to_csv(csv_filename, index=False)
+        print(f"  Creado: {csv_filename}")
+
+    print(f"\n  Resumen guardado:")
+    print(f"    Archivo:    {os.path.basename(filename)}")
+    print(f"    HJD:        {hjd_value:.6f}")
+    print(f"    Gaussianas: {n_gauss}")
+    print(f"    chi2/nu:    {result.redchi:.4e}")
+    print(f"    CSV:        {os.path.abspath(csv_filename)}")

@@ -15,16 +15,15 @@ import numpy as np
 import sys
 import os
 import argparse
-import pandas as pd
 import json
-from astropy.io import fits as astropy_fits
-import shutil
 from matplotlib.gridspec import GridSpec
 from matplotlib.widgets import SpanSelector
 from scipy.interpolate import Akima1DInterpolator
-from specpy.utils import (read_fits_simple, read_votable, fit_cont_sigma,
+from specpy.utils import (read_fits_simple, fit_cont_sigma,
                           mask_generator, gaussian, fit_lines,
-                          find_closest_line, vr, vrerr)
+                          find_closest_line, vr, vrerr,
+                          calculate_smart_ylimits, save_spectrum_fits,
+                          save_fit_to_csv)
 
 # Claves de cabecera FITS aceptadas como tiempo heliocentrizo/baricentrico.
 # Se prueban en orden; se usa la primera que se encuentre.
@@ -50,21 +49,9 @@ def load_spectrum(filename):
     flux : np.ndarray o None
         Devuelve (None, None, None) si hay error de lectura o falta la clave HJD.
     """
-    def _is_votable(path):
-        """Detecta si el archivo es XML/VOTable leyendo los primeros bytes."""
-        try:
-            with open(path, 'rb') as fh:
-                return fh.read(5).lstrip(b'\xef\xbb\xbf') [:1] == b'<'
-        except OSError:
-            return False
-
     try:
-        if _is_votable(filename):
-            header, wavelength, flux = read_votable(filename)
-            print(f"LOADED VOTABLE SPECTRUM FROM {filename}")
-        else:
-            header, wavelength, flux = read_fits_simple(filename)
-            print(f"LOADED SPECTRUM FROM {filename}")
+        header, wavelength, flux = read_fits_simple(filename)
+        print(f"LOADED SPECTRUM FROM {filename}")
         print(f"  Wavelength range: {wavelength[0]:.2f} - {wavelength[-1]:.2f}")
         print(f"  Number of points: {len(wavelength)}")
 
@@ -92,45 +79,6 @@ def load_spectrum(filename):
         print(f"Error loading spectrum: {e}")
         return None, None, None
 
-
-def calculate_smart_ylimits(data, central_fraction=0.8, margin_factor=0.1):
-    """
-    Calcula limites Y robustos para graficar espectros con outliers.
-
-    En lugar de usar min/max (sensibles a picos cosmicosy artefactos),
-    usa los percentiles 1 y 99 de la fraccion central del array,
-    y agrega un margen proporcional al rango.
-
-    Parameters
-    ----------
-    data : np.ndarray
-        Array de flujo.
-    central_fraction : float
-        Fraccion del array a considerar como region central (default 0.8).
-    margin_factor : float
-        Factor del rango a agregar como margen (default 0.1).
-
-    Returns
-    -------
-    ymin, ymax : float
-    """
-    if len(data) == 0:
-        return 0, 1
-
-    n = len(data)
-    lo = max(0, int((1 - central_fraction) / 2 * n))
-    hi = min(n, int((1 + central_fraction) / 2 * n))
-    central = data[lo:hi]
-
-    if len(central) == 0:
-        return np.min(data), np.max(data)
-
-    ymin = np.percentile(central, 1)
-    ymax = np.percentile(central, 99)
-    margin = (ymax - ymin) * margin_factor
-    ymin = max(ymin - margin, 0) if np.min(data) >= 0 else ymin - margin
-    ymax = ymax + margin
-    return ymin, ymax
 
 
 def interactive_normalization(wavelength, flux, filename):
@@ -175,7 +123,6 @@ def interactive_normalization(wavelength, flux, filename):
     selection_active = [False]
     continuum_line = [None]    # linea roja del continuo final en ax_spec
 
-    COLORS = [plt.cm.tab10(i) for i in range(10)]
 
     # ── Setup ─────────────────────────────────────────────────────────────────
     ax_spec.plot(wavelength, flux, 'k-', linewidth=1.5, label='Espectro')
@@ -384,7 +331,7 @@ def interactive_normalization(wavelength, flux, filename):
         else:
             r['used_points_handle'] = None
 
-    def activate_range(r, ridx):
+    def activate_range(r, _ridx=None):
         """Convierte un rango sellado en activo: quita '+', recrea patches rojos."""
         if r.get('used_points_handle') is not None:
             try:
@@ -645,6 +592,13 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
     gaussian_patches = []    # artists temporales durante la definicion
     json_preview_lines = []  # curvas de prevista cargadas del JSON al inicio
 
+    # Continuo local: dos regiones (izquierda y derecha de la línea)
+    bkg_regions = []       # [[wmin1,wmax1], [wmin2,wmax2]] — max 2
+    bkg_coeffs = [None]    # [slope, intercept] de np.polyfit
+    bkg_patches = []       # axvspan verdes
+    bkg_line_art = [None]  # linea verde del continuo ajustado
+    bkg_span = [None]      # SpanSelector activo
+
     # Modo de borrado de puntos
     erase_mode = False
     removed_indices = []     # indices en el array original de puntos eliminados
@@ -683,17 +637,23 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             if gaussians:
                 msg += "  |  a: ajustar"
         elif step == 'center':
-            msg = "Paso 1/3: click en el CENTRO de la linea (x=lambda, y=profundidad)"
-        elif step == 'fwhm_left':
-            msg = "Paso 2/3: click a la IZQUIERDA del centro para el FWHM"
-        elif step == 'fwhm_right':
-            msg = "Paso 3/3: click a la DERECHA del centro para el FWHM"
+            msg = "Paso 1/2: click en el CENTRO de la linea"
+        elif step == 'fwhm':
+            msg = "Paso 2/2: click a cualquier lado del centro para definir el FWHM (simetrico)"
 
         # Resumen de gaussianas definidas
         info = f"\nGaussianas: {len(gaussians)}"
         for i, (c, a, fwhm) in enumerate(gaussians, 1):
             depth = 1 + a
             info += f"\n  G{i}: lambda={c:.2f} A  profundidad={depth:.3f}  FWHM={fwhm:.2f} A"
+
+        if bkg_regions:
+            n = len(bkg_regions)
+            info += f"\nContinuo: {n}/2 region(es)"
+            if bkg_coeffs[0] is not None:
+                info += f"  slope={bkg_coeffs[0][0]:.3g}"
+        else:
+            info += "\nContinuo: no definido  (w: definir)"
 
         if result is not None:
             info += f"\nAjuste: chi2_reducido={result.redchi:.3e}"
@@ -708,6 +668,8 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
                            linewidth=3, linestyle='-', label=None):
         """Dibuja una gaussiana sobre el espectro actual y devuelve el handle."""
         y = gaussian(current_wavelength, center, amplitude, fwhm)
+        if bkg_coeffs[0] is not None:
+            y = y * np.polyval(bkg_coeffs[0], current_wavelength)
         line, = ax.plot(current_wavelength, y, color=color, linewidth=linewidth,
                         linestyle=linestyle, alpha=alpha, label=label)
         return line
@@ -780,20 +742,31 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         for i, (center, amplitude, fwhm_val) in enumerate(gaussians, 1):
             prefix = f'g{i}_'
             sigma = fwhm_val / 2.3548200
-            amp = amplitude * sigma * np.sqrt(2 * np.pi)
+            # Escalar amplitud al espacio del flujo real usando el continuo en el centro
+            if bkg_coeffs[0] is not None:
+                cont_at_center = float(np.polyval(bkg_coeffs[0], center))
+            else:
+                cont_at_center = float(np.percentile(current_flux, 95))
+            amp = amplitude * cont_at_center * sigma * np.sqrt(2 * np.pi)
             fit_params[f'{prefix}center'] = {'value': center,
                                              'min': center * (1 - tol),
                                              'max': center * (1 + tol)}
             fit_params[f'{prefix}sigma'] = {'value': sigma,
                                             'min': sigma * (1 - tol),
                                             'max': sigma * (1 + tol)}
-            # amplitude es negativo para absorcion: min/max se invierten
             fit_params[f'{prefix}amplitude'] = {
                 'value': amp,
                 'min': amp * (1 + tol) if amp < 0 else amp * (1 - tol),
                 'max': amp * (1 - tol) if amp < 0 else amp * (1 + tol),
             }
-        fit_params['bkg_c'] = {'value': 1.0, 'vary': False}
+        # Fondo lineal: inicializar desde el ajuste del continuo si está disponible
+        if bkg_coeffs[0] is not None:
+            fit_params['bkg_slope']     = {'value': float(bkg_coeffs[0][0]), 'vary': True}
+            fit_params['bkg_intercept'] = {'value': float(bkg_coeffs[0][1]), 'vary': True}
+        else:
+            flux_scale = float(np.percentile(current_flux, 95))
+            fit_params['bkg_intercept'] = {'value': flux_scale, 'vary': True}
+            fit_params['bkg_slope']     = {'value': 0.0, 'vary': True}
         return fit_params
 
     def combine_params():
@@ -885,7 +858,21 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
                 else:
                     combined[f'{prefix}{param}'] = {'value': manual_val}
 
-        combined['bkg_c'] = params_dict.get('bkg_c', {'value': 1.0, 'vary': False})
+        # Fondo lineal: respetar JSON si tiene bkg_intercept/slope; si tiene bkg_c (legacy) usarlo como intercept
+        if 'bkg_intercept' in params_dict or 'bkg_slope' in params_dict:
+            combined['bkg_intercept'] = params_dict.get('bkg_intercept', {'value': 1.0, 'vary': True})
+            combined['bkg_slope'] = params_dict.get('bkg_slope', {'value': 0.0, 'vary': True})
+        elif 'bkg_c' in params_dict:
+            combined['bkg_intercept'] = {'value': params_dict['bkg_c'].get('value', 1.0), 'vary': True}
+            combined['bkg_slope'] = {'value': 0.0, 'vary': True}
+        else:
+            if bkg_coeffs[0] is not None:
+                combined['bkg_slope']     = {'value': float(bkg_coeffs[0][0]), 'vary': True}
+                combined['bkg_intercept'] = {'value': float(bkg_coeffs[0][1]), 'vary': True}
+            else:
+                flux_scale = float(np.percentile(current_flux, 95))
+                combined['bkg_intercept'] = {'value': flux_scale, 'vary': True}
+                combined['bkg_slope']     = {'value': 0.0, 'vary': True}
         return combined
 
     def do_fit():
@@ -897,7 +884,21 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             return
 
         try:
-            result = fit_lines(current_wavelength, current_flux, fit_params)
+            if bkg_regions:
+                wmin_fit = min(r[0] for r in bkg_regions)
+                wmax_fit = max(r[1] for r in bkg_regions)
+                rmask = (current_wavelength >= wmin_fit) & (current_wavelength <= wmax_fit)
+                fit_wl = current_wavelength[rmask]
+                fit_fl = current_flux[rmask]
+            else:
+                fit_wl = current_wavelength
+                fit_fl = current_flux
+
+            if len(fit_wl) < 5:
+                print("  Error: el rango de ajuste tiene muy pocos puntos.")
+                return
+
+            result = fit_lines(fit_wl, fit_fl, fit_params)
 
             # Limpiar curva de ajuste anterior y vista previa del JSON
             for line in fitted_lines + json_preview_lines:
@@ -905,21 +906,21 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             fitted_lines.clear()
             json_preview_lines.clear()
 
-            fitted_line, = ax.plot(current_wavelength, result.best_fit,
+            fitted_line, = ax.plot(fit_wl, result.best_fit,
                                    color='red', linewidth=4, alpha=0.6,
                                    label='Ajuste total')
             fitted_lines.append(fitted_line)
 
-            # Graficar componentes individuales: bkg_c + g{i}(x)
-            components = result.eval_components(x=current_wavelength)
+            # Graficar componentes individuales: bkg + g{i}(x)
+            components = result.eval_components(x=fit_wl)
             bkg = components.get('bkg_', 0.0)
             g_keys = sorted(k for k in components if k.startswith('g'))
             for idx, key in enumerate(g_keys):
                 color = plt.cm.tab10(idx % 10)
-                g_num = key.rstrip('_')  # 'g1_' -> 'g1'
+                g_num = key.rstrip('_')
                 center_val = result.params.get(f'{key}center')
                 center_str = f'{center_val.value:.2f} A' if center_val else g_num
-                comp_line, = ax.plot(current_wavelength, bkg + components[key],
+                comp_line, = ax.plot(fit_wl, bkg + components[key],
                                      color=color, linewidth=2, linestyle=':',
                                      alpha=0.9, label=f'{g_num}: {center_str}')
                 fitted_lines.append(comp_line)
@@ -1016,6 +1017,71 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         fig.canvas.draw_idle()
         update_status()
 
+    def _onselect_bkg(xmin, xmax):
+        if xmin > xmax:
+            xmin, xmax = xmax, xmin
+        if len(bkg_regions) >= 2:
+            print("  Ya hay 2 regiones. Presiona W para limpiar y redefinir.")
+            return
+        bkg_regions.append([xmin, xmax])
+        bkg_patches.append(ax.axvspan(xmin, xmax, alpha=0.2, color='green', zorder=0))
+        remaining = 2 - len(bkg_regions)
+        if remaining > 0:
+            print(f"  Region {len(bkg_regions)}/2 [{xmin:.2f}, {xmax:.2f}] A. "
+                  f"Arrastra para la {len(bkg_regions)+1}a region.")
+        else:
+            _fit_bkg_line()
+            if bkg_span[0] is not None:
+                bkg_span[0].disconnect_events()
+                bkg_span[0] = None
+        update_status()
+
+    def _fit_bkg_line():
+        mask = np.zeros(len(current_wavelength), dtype=bool)
+        for wmin, wmax in bkg_regions:
+            mask |= (current_wavelength >= wmin) & (current_wavelength <= wmax)
+        if np.sum(mask) < 2:
+            print("  Continuo: pocos puntos en las regiones.")
+            return
+        coeffs = np.polyfit(current_wavelength[mask], current_flux[mask], 1)
+        bkg_coeffs[0] = coeffs
+        if bkg_line_art[0] is not None:
+            try:
+                bkg_line_art[0].remove()
+            except Exception:
+                pass
+        wmins = [r[0] for r in bkg_regions]
+        wmaxs = [r[1] for r in bkg_regions]
+        x_draw = np.linspace(min(wmins), max(wmaxs), 300)
+        bkg_line_art[0], = ax.plot(x_draw, np.polyval(coeffs, x_draw),
+                                    'g-', linewidth=2, alpha=0.85, label='Continuo')
+        ax.legend(loc='best')
+        fig.canvas.draw_idle()
+        print(f"  Continuo ajustado: slope={coeffs[0]:.3g}  intercept={coeffs[1]:.3g}")
+
+    def _clear_bkg():
+        bkg_regions.clear()
+        bkg_coeffs[0] = None
+        if bkg_span[0] is not None:
+            bkg_span[0].disconnect_events()
+            bkg_span[0] = None
+        for patch in bkg_patches:
+            try:
+                patch.remove()
+            except Exception:
+                pass
+        bkg_patches.clear()
+        if bkg_line_art[0] is not None:
+            try:
+                bkg_line_art[0].remove()
+            except Exception:
+                pass
+            bkg_line_art[0] = None
+        ax.legend(loc='best')
+        fig.canvas.draw_idle()
+        print("  Continuo eliminado")
+        update_status()
+
     def on_click(event):
         nonlocal step, current_gaussian, erase_mode
         if event.inaxes != ax:
@@ -1032,34 +1098,32 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         ymin, ymax = ax.get_ylim()
 
         if step == 'center':
-            # Restringir depth al rango [0, 1.2]
-            depth = np.clip(y, 0.0, 1.2)
+            if bkg_coeffs[0] is not None:
+                bkg_at_x = np.polyval(bkg_coeffs[0], x)
+                depth = y / bkg_at_x if bkg_at_x != 0 else np.clip(y, 0.0, 1.2)
+            else:
+                depth = np.clip(y, 0.0, 1.2)
             vline = ax.vlines(x, ymin, ymax, color='blue', linestyle='--', alpha=0.5)
             label = ax.text(x, ymax * 0.95, f'{x:.2f} A',
                             color='blue', ha='center', fontsize=9)
             gaussian_patches.extend([vline, label])
             current_gaussian = [x, depth]
-            step = 'fwhm_left'
+            step = 'fwhm'
             print(f"  Centro: {x:.2f} A  profundidad: {depth:.3f}")
 
-        elif step == 'fwhm_left':
-            if x >= current_gaussian[0]:
-                print("  Click a la IZQUIERDA del centro.")
+        elif step == 'fwhm':
+            center = current_gaussian[0]
+            half_width = abs(x - center)
+            if half_width == 0:
+                print("  Click en un punto distinto al centro.")
                 return
-            vline = ax.vlines(x, ymin, ymax, color='orange', linestyle='--', alpha=0.5)
-            gaussian_patches.append(vline)
-            current_gaussian.append(x)
-            step = 'fwhm_right'
-            print(f"  FWHM izquierdo: {x:.2f} A")
-
-        elif step == 'fwhm_right':
-            if x <= current_gaussian[0]:
-                print("  Click a la DERECHA del centro.")
-                return
-            vline = ax.vlines(x, ymin, ymax, color='orange', linestyle='--', alpha=0.5)
-            gaussian_patches.append(vline)
-            current_gaussian.append(x)
-            print(f"  FWHM derecho: {x:.2f} A")
+            left_x  = center - half_width
+            right_x = center + half_width
+            for fx in (left_x, right_x):
+                vline = ax.vlines(fx, ymin, ymax, color='orange', linestyle='--', alpha=0.5)
+                gaussian_patches.append(vline)
+            current_gaussian.extend([left_x, right_x])
+            print(f"  FWHM: {2*half_width:.2f} A")
             finalize_gaussian()
 
         update_status()
@@ -1125,6 +1189,19 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             ax.legend(loc='best')
             update_status()
 
+        elif event.key == 'w':
+            if bkg_span[0] is not None:
+                bkg_span[0].disconnect_events()
+            bkg_span[0] = SpanSelector(
+                ax, _onselect_bkg, 'horizontal', useblit=True,
+                props=dict(alpha=0.2, facecolor='green'),
+                interactive=True, drag_from_anywhere=True)
+            remaining = 2 - len(bkg_regions)
+            print(f"  Arrastra para definir region de continuo ({remaining} restante(s))")
+
+        elif event.key == 'W':
+            _clear_bkg()
+
         elif event.key == 'escape':
             if step is not None:
                 clear_current_gaussian()
@@ -1171,7 +1248,9 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
     print("\n" + "="*60)
     print("MODO AJUSTE DE GAUSSIANAS")
     print("="*60)
-    print("  d         nueva gaussiana (3 clics: centro, FWHM izq, FWHM der)")
+    print("  w         definir region de continuo (2 drags: izq y der de la linea)")
+    print("  W         limpiar regiones de continuo")
+    print("  d         nueva gaussiana (2 clics: centro, un lado del FWHM)")
     print("  a         ajustar automaticamente todas las gaussianas")
     print("  b         eliminar ultima gaussiana")
     print("  c         limpiar todas las gaussianas")
@@ -1261,268 +1340,6 @@ def _print_vr_summary(result, vhelio):
     print("="*60)
     return high_vr
 
-
-def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=None):
-    """
-    Guarda los resultados de un ajuste lmfit en un archivo CSV.
-
-    Si el archivo ya existe, agrega la nueva fila. Si las columnas no coinciden
-    pregunta al usuario como proceder. El nombre del archivo es
-    'fitted_<linename>.csv' en el directorio de trabajo actual, o csv_filename
-    si se especifica.
-
-    Parameters
-    ----------
-    filename : str
-        Ruta al espectro FITS (solo se guarda el basename).
-    linename : str
-        Nombre de la linea espectral; determina el nombre del CSV si csv_filename es None.
-    hjd_value : float
-        Tiempo heliocentrizo/baricentrico del header.
-    vhelio : float
-        Velocidad heliocentrica (km/s) del header; 0.0 si no esta disponible.
-    result : lmfit.ModelResult
-        Resultado del ajuste de gaussianas.
-    csv_filename : str o None
-        Nombre del archivo CSV de salida. Si es None se usa 'fitted_<linename>.csv'.
-    """
-
-    if csv_filename is None:
-        csv_filename = f"fitted_{linename}.csv"
-
-    # Informacion general
-    data_dict = {
-        'filename': [os.path.basename(filename)],
-        'hjd':      [f"{hjd_value:.6f}"],
-        'vhelio':   [f"{vhelio:.6f}"],
-        'chi2_red': [f"{result.redchi:.4f}"],
-        'success':  [result.success],
-    }
-
-    # Extraer parametros de cada gaussiana
-    gaussian_params = {}
-    for param_name in result.params:
-        if param_name.startswith('g') and '_' in param_name:
-            parts = param_name.split('_', 1)
-            try:
-                g_num = int(parts[0][1:])
-                param_type = parts[1]
-                if g_num not in gaussian_params:
-                    gaussian_params[g_num] = {}
-                p = result.params[param_name]
-                gaussian_params[g_num][param_type] = {
-                    'value': p.value,
-                    'error': p.stderr if p.stderr is not None else np.nan,
-                    'vary':  p.vary,
-                }
-            except ValueError:
-                continue
-
-    n_gauss = len(gaussian_params)
-    data_dict['n_gauss'] = [n_gauss]
-
-    for i in range(1, n_gauss + 1):
-        if i not in gaussian_params:
-            continue
-        g = gaussian_params[i]
-
-        center_val = g.get('center', {}).get('value', np.nan)
-        center_err = g.get('center', {}).get('error', np.nan)
-        data_dict[f'center{i}']      = [f"{center_val:.4f}"]
-        data_dict[f'center{i}_err']  = [f"{center_err:.4f}" if not np.isnan(center_err) else ""]
-        data_dict[f'center{i}_vary'] = [g.get('center', {}).get('vary', True)]
-
-        sigma_val = g.get('sigma', {}).get('value', np.nan)
-        sigma_err = g.get('sigma', {}).get('error', np.nan)
-        data_dict[f'sigma{i}']      = [f"{sigma_val:.4f}"]
-        data_dict[f'sigma{i}_err']  = [f"{sigma_err:.4f}" if not np.isnan(sigma_err) else ""]
-        data_dict[f'sigma{i}_vary'] = [g.get('sigma', {}).get('vary', True)]
-
-        fwhm_val = sigma_val * 2.3548200 if not np.isnan(sigma_val) else np.nan
-        fwhm_err = sigma_err * 2.3548200 if not np.isnan(sigma_err) else np.nan
-        data_dict[f'fwhm{i}']     = [f"{fwhm_val:.4f}"]
-        data_dict[f'fwhm{i}_err'] = [f"{fwhm_err:.4f}" if not np.isnan(fwhm_err) else ""]
-
-        amp_val = g.get('amplitude', {}).get('value', np.nan)
-        amp_err = g.get('amplitude', {}).get('error', np.nan)
-        data_dict[f'amp{i}']      = [f"{amp_val:.4f}"]
-        data_dict[f'amp{i}_err']  = [f"{amp_err:.4f}" if not np.isnan(amp_err) else ""]
-        data_dict[f'amp{i}_vary'] = [g.get('amplitude', {}).get('vary', True)]
-
-        if not np.isnan(amp_val) and not np.isnan(sigma_val) and sigma_val != 0:
-            height_val = amp_val / (sigma_val * np.sqrt(2 * np.pi))
-            depth_val  = 1 + height_val
-            data_dict[f'height{i}'] = [f"{height_val:.4f}"]
-            data_dict[f'depth{i}']  = [f"{depth_val:.4f}"]
-        else:
-            data_dict[f'height{i}'] = [""]
-            data_dict[f'depth{i}']  = [""]
-
-        # Ancho equivalente: EW = -amplitude
-        ew_val = -amp_val if not np.isnan(amp_val) else np.nan
-        ew_err = amp_err  if not np.isnan(amp_err) else np.nan
-        data_dict[f'ew{i}']     = [f"{ew_val:.4f}" if not np.isnan(ew_val) else ""]
-        data_dict[f'ew{i}_err'] = [f"{ew_err:.4f}" if not np.isnan(ew_err) else ""]
-
-        # Velocidad radial usando la linea en reposo mas cercana
-        center_val = g.get('center', {}).get('value', np.nan)
-        center_err = g.get('center', {}).get('error', np.nan)
-        try:
-            line_info  = find_closest_line(center_val)
-            lambda0    = line_info['lambda_rest']
-            vr_val     = vr(center_val, lambda0, vhelio)
-            vr_err_val = vrerr(center_err, lambda0) if not np.isnan(center_err) else np.nan
-            data_dict[f'line{i}_name']    = [line_info.get('name', '')]
-            data_dict[f'line{i}_lambda0'] = [f"{lambda0:.4f}"]
-            data_dict[f'vr{i}']           = [f"{vr_val:.4f}"]
-            data_dict[f'vr{i}_err']       = [f"{vr_err_val:.4f}" if not np.isnan(vr_err_val) else ""]
-        except Exception:
-            data_dict[f'line{i}_name']    = [""]
-            data_dict[f'line{i}_lambda0'] = [""]
-            data_dict[f'vr{i}']           = [""]
-            data_dict[f'vr{i}_err']       = [""]
-
-    # Fondo (bkg_c)
-    bkg_found = False
-    for param_name in result.params:
-        if param_name.startswith('bkg_'):
-            bkg = result.params[param_name]
-            data_dict['bkg_c']      = [f"{bkg.value:.4f}"]
-            data_dict['bkg_c_err']  = [f"{bkg.stderr:.4f}" if bkg.stderr is not None else ""]
-            data_dict['bkg_c_vary'] = [bkg.vary]
-            bkg_found = True
-            break
-    if not bkg_found:
-        data_dict['bkg_c'] = data_dict['bkg_c_err'] = data_dict['bkg_c_vary'] = [""]
-
-    # Orden de columnas
-    base_cols = ['filename', 'hjd', 'vhelio', 'chi2_red', 'success', 'n_gauss']
-    gauss_cols = []
-    for i in range(1, n_gauss + 1):
-        gauss_cols.extend([
-            f'center{i}', f'center{i}_err', f'center{i}_vary',
-            f'sigma{i}',  f'sigma{i}_err',  f'sigma{i}_vary',
-            f'fwhm{i}',   f'fwhm{i}_err',
-            f'amp{i}',    f'amp{i}_err',    f'amp{i}_vary',
-            f'height{i}', f'depth{i}',
-            f'ew{i}', f'ew{i}_err',
-            f'line{i}_name', f'line{i}_lambda0', f'vr{i}', f'vr{i}_err',
-        ])
-    all_cols = base_cols + gauss_cols + ['bkg_c', 'bkg_c_err', 'bkg_c_vary']
-    for col in all_cols:
-        if col not in data_dict:
-            data_dict[col] = [""]
-
-    df_new = pd.DataFrame({col: data_dict[col] for col in all_cols})
-
-    if os.path.exists(csv_filename):
-        try:
-            df_existing = pd.read_csv(csv_filename)
-            existing_cols = set(df_existing.columns)
-            new_cols = set(df_new.columns)
-
-            if existing_cols != new_cols:
-                print(f"\n  Aviso: las columnas del CSV existente no coinciden con las nuevas.")
-                print(f"  Columnas existentes: {len(existing_cols)}")
-                print(f"  Columnas nuevas:     {len(new_cols)}")
-                print("  Opciones:")
-                print("    1  agregar de todos modos (puede generar columnas vacias)")
-                print("    2  crear archivo nuevo (backup del existente)")
-                print("    3  cancelar")
-                choice = input("  Eleccion (1-3): ").strip()
-
-                if choice == '1':
-                    merged_cols = sorted(existing_cols.union(new_cols))
-                    for col in merged_cols:
-                        if col not in df_existing.columns:
-                            df_existing[col] = ""
-                        if col not in df_new.columns:
-                            df_new[col] = ""
-                    df_existing = df_existing[merged_cols]
-                    df_new = df_new[merged_cols]
-                    pd.concat([df_existing, df_new], ignore_index=True).to_csv(csv_filename, index=False)
-                    print(f"  Agregado a {csv_filename} (columnas ajustadas).")
-
-                elif choice == '2':
-                    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-                    backup = f"{csv_filename}.backup_{timestamp}"
-                    shutil.copy2(csv_filename, backup)
-                    print(f"  Backup creado: {backup}")
-                    df_new.to_csv(csv_filename, index=False)
-                    print(f"  Nuevo archivo: {csv_filename}")
-
-                else:
-                    print("  Guardado cancelado.")
-                    return
-            else:
-                pd.concat([df_existing, df_new], ignore_index=True).to_csv(csv_filename, index=False)
-                print(f"  Fila agregada a {csv_filename}")
-
-        except Exception as e:
-            print(f"  Error leyendo CSV existente: {e}. Creando nuevo archivo.")
-            df_new.to_csv(csv_filename, index=False)
-            print(f"  Creado: {csv_filename}")
-    else:
-        df_new.to_csv(csv_filename, index=False)
-        print(f"  Creado: {csv_filename}")
-
-    print(f"\n  Resumen guardado:")
-    print(f"    Archivo:    {os.path.basename(filename)}")
-    print(f"    HJD:        {hjd_value:.6f}")
-    print(f"    Gaussianas: {n_gauss}")
-    print(f"    chi2/nu:    {result.redchi:.4e}")
-    print(f"    CSV:        {os.path.abspath(csv_filename)}")
-
-
-def save_spectrum_fits(out_path, header, wavelength, flux):
-    """
-    Guarda un espectro 1D en formato FITS preservando el WCS del original.
-
-    Actualiza las claves WCS (CRVAL1, CDELT1, CRPIX1, NAXIS1) para que
-    correspondan al array guardado. Maneja el caso de escala log-lineal
-    (DC-FLAG = 1), en el que CRVAL1 y CDELT1 se guardan en log10.
-
-    Elimina claves que no aplican a un espectro 1D (NAXIS2, NAXIS3, WCSDIM).
-
-    Parameters
-    ----------
-    out_path : str
-        Ruta de salida del archivo FITS.
-    header : astropy.io.fits.Header
-        Cabecera original del espectro (se copia y modifica, no se altera).
-    wavelength : np.ndarray
-        Longitudes de onda del espectro a guardar.
-    flux : np.ndarray
-        Flujo del espectro a guardar.
-    """
-    
-    new_header = header.copy()
-
-    # Eliminar claves que no corresponden a un espectro 1D
-    for key in ['NAXIS2', 'NAXIS3', 'WCSDIM']:
-        if key in new_header:
-            del new_header[key]
-
-    new_header['NAXIS'] = 1
-    new_header['NAXIS1'] = len(wavelength)
-    new_header['CRPIX1'] = 1  # el primer pixel corresponde a CRVAL1
-    new_header['PROCSPEC'] = 'spec.py'
-
-    if 'DC-FLAG' in header and header['DC-FLAG'] == 1:
-        # Escala log-lineal: las claves WCS se guardan en log10(lambda).
-        # Un recorte de grilla log-lineal sigue siendo log-uniforme, así que
-        # mean(diff(log10)) es exacto (no una aproximación).
-        new_header['CRVAL1'] = np.log10(wavelength[0])
-        new_header['CDELT1'] = np.mean(np.diff(np.log10(wavelength)))
-        new_header['DC-FLAG'] = 1
-    else:
-        new_header['CRVAL1'] = wavelength[0]
-        new_header['CDELT1'] = np.mean(np.diff(wavelength))
-        if 'DC-FLAG' in new_header:
-            del new_header['DC-FLAG']
-
-    hdu = astropy_fits.PrimaryHDU(flux.astype(np.float32), header=new_header)
-    hdu.writeto(out_path, overwrite=True)
 
 
 def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windowed=False,
