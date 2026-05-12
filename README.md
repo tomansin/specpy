@@ -2,7 +2,13 @@
 
 Visualizador interactivo de espectros estelares en formato FITS.
 
-## Uso
+Incluye dos scripts:
+- **`spec.py`** — espectros 1D estándar (REOSC, FEROS, HARPS, SOPHIE, HARPN, UVES, etc.)
+- **`multispec.py`** — espectros en formato IRAF MULTISPEC (múltiples órdenes)
+
+---
+
+## spec.py
 
 ```bash
 spec.py <archivo.fits> [opciones]
@@ -19,71 +25,105 @@ spec.py <archivo.fits> [opciones]
 
 ---
 
-## Modos interactivos
-
 ### Visualizador principal
 
 | Tecla | Acción |
 |-------|--------|
-| `w` | Activar SpanSelector para definir ventana de recorte |
+| `w` | Definir ventana de recorte (arrastrar) |
 | `Enter` | Aplicar recorte |
 | `z` | Volver al espectro completo |
-| `n` | Abrir modo normalización |
-| `d` | Abrir modo ajuste de gaussianas |
-| `x` | Guardar espectro actual como FITS (`_crop`, `_norm`) |
+| `n` | Modo normalización |
+| `d` | Modo ajuste de gaussianas |
+| `x` | Guardar espectro actual como FITS |
+| `h` | Imprimir header FITS en terminal |
 | `q` | Cerrar |
 | — | — |
-| `p` | Pan (arrastrar para mover) |
-| `o` | Zoom (arrastrar para seleccionar región) |
+| `p` | Pan |
+| `o` | Zoom rectangular |
 | scroll | Zoom in/out |
-| `home` | Reset vista al estado original |
+| `home` | Reset vista |
 
 ---
 
 ### Modo normalización (`n`)
 
-Ajuste de continuo por rangos con interpolación Akima.
-
-**Flujo de trabajo:**
-1. Presionar `a` para activar el SpanSelector y arrastrar para marcar regiones del continuo.
-2. Se ajusta un polinomio Chebyshev con σ-clipping a los puntos seleccionados.
-3. Presionar `b` para sellar el rango activo e iniciar uno nuevo (cada rango tiene su propio polinomio).
-4. Con varios rangos, los polinomios se unen con una interpolación Akima para construir el continuo final.
-5. Las zonas fuera de los rangos definidos no se normalizan.
+Ajuste de continuo por rangos con interpolación Akima entre rangos múltiples.
 
 | Tecla | Acción |
 |-------|--------|
 | `a` | Activar/desactivar SpanSelector de regiones |
 | `b` | Sellar rango activo e iniciar uno nuevo |
 | `e` | Eliminar última región (elimina el rango si queda vacío) |
-| `+` / `-` | Subir/bajar orden del polinomio del rango activo |
+| `+` / `-` | Subir/bajar orden del polinomio Chebyshev del rango activo |
 | `q` | Confirmar y cerrar (pregunta si guardar) |
 
-Con un solo rango el comportamiento es idéntico al ajuste clásico de un polinomio global.
+Con un solo rango se ajusta un polinomio global. Con varios rangos, los polinomios se unen con interpolación Akima. Las zonas fuera de todos los rangos no se normalizan.
 
 ---
 
-### Modo ajuste de gaussianas (`g`)
+### Modo ajuste de gaussianas (`d`)
 
-Ajuste de líneas espectrales con modelo gaussiano + fondo constante (lmfit).
+Ajuste de líneas espectrales con modelo gaussiano + **fondo lineal** (`bkg_intercept + bkg_slope × λ`), ambos parámetros libres en el ajuste.
 
-**Flujo de trabajo:**
-1. Presionar `g` para iniciar la definición de una gaussiana.
-2. Tres clics: centro (`x` = λ, `y` = profundidad), FWHM izquierdo, FWHM derecho.
-3. Repetir para todas las líneas a ajustar.
-4. Presionar `a` para ejecutar el ajuste automático.
+**Flujo de trabajo recomendado:**
+
+1. **`w`** — arrastrar para definir la región de continuo **izquierda** de la línea (sombra verde).
+2. **`w`** — arrastrar para definir la región de continuo **derecha** de la línea. Al tener las 2 regiones se ajusta una recta al continuo, que se muestra superpuesta al espectro. El rango de ajuste queda definido automáticamente como el intervalo entre ambas regiones.
+3. **`d`** — 2 clics para definir cada gaussiana:
+   - Clic 1: centro de la línea (x = λ, y = flujo).
+   - Clic 2: cualquier punto a un lado del centro para definir el FWHM (simétrico).
+4. **`a`** — ejecuta el ajuste lmfit. Las gaussianas y el fondo lineal se ajustan simultáneamente sobre el rango definido.
 
 | Tecla | Acción |
 |-------|--------|
-| `g` | Iniciar definición de nueva gaussiana |
-| `a` | Ejecutar ajuste (lmfit) |
-| `b` | Eliminar última gaussiana |
+| `w` | Definir región de continuo (2 drags: izquierda y derecha de la línea) |
+| `W` | Limpiar regiones de continuo |
+| `d` | Nueva gaussiana (2 clics: centro + un lado del FWHM) |
+| `a` | Ejecutar ajuste lmfit |
+| `b` | Eliminar última gaussiana definida |
 | `c` | Limpiar todas las gaussianas y el ajuste |
-| `e` | Activar modo borrado de puntos |
-| `r` (en modo borrado) | Restaurar todos los puntos eliminados |
-| `q` | Cerrar y guardar resultados en CSV |
+| `e` | Activar modo borrado de puntos individuales |
+| `b` (en modo borrado) | Restaurar todos los puntos eliminados |
+| `escape` | Cancelar gaussiana en construcción |
+| `q` | Cerrar |
 
-Al cerrar, muestra velocidades radiales y anchos equivalentes (EW) para cada gaussiana, e identifica la línea de reposo más cercana con `lines.csv`.
+Al ajustar, muestra en terminal el reporte lmfit con velocidades radiales (vr) y anchos equivalentes (EW) para cada componente, identificando la línea de reposo más cercana desde `lines.csv`.
+
+---
+
+## multispec.py
+
+```bash
+multispec.py <archivo.fits>
+```
+
+Lee archivos FITS con `CTYPE1 = 'MULTISPE'` (formato IRAF multispec). Soporta cualquier instrumento que use ese estándar.
+
+### Visualizador MULTISPEC
+
+| Tecla | Acción |
+|-------|--------|
+| `(` | Orden anterior |
+| `)` | Orden siguiente |
+| `n` | Normalizar orden activo (hereda regiones del orden anterior) |
+| `x` | Guardar FITS con todos los órdenes (normalizados donde corresponda) |
+| `w` | Definir ventana de zoom |
+| `Enter` | Aplicar ventana |
+| `z` | Reset vista |
+| `d` | Modo ajuste de gaussianas |
+| `h` | Imprimir header |
+| `q` | Cerrar |
+
+### Normalización por órdenes
+
+Al presionar `n` se abre el modo normalización para el orden activo. Dentro de ese modo:
+
+| Tecla | Acción |
+|-------|--------|
+| `(` / `)` | Cambiar al orden anterior/siguiente (guarda el normalizado actual automáticamente y hereda las regiones al nuevo orden) |
+| `q` | Confirmar y cerrar |
+
+Al presionar `x` o `q` en el visualizador principal, se ofrece guardar un archivo `<nombre>_norm.fits` con los órdenes normalizados reemplazados y los demás intactos. El título muestra `[O N*/total]` donde `*` indica que el orden está normalizado y el número junto a `N` indica cuántos órdenes se normalizaron.
 
 ---
 
@@ -91,10 +131,11 @@ Al cerrar, muestra velocidades radiales y anchos equivalentes (EW) para cada gau
 
 | Archivo | Descripción |
 |---------|-------------|
-| `<nombre>_norm.fits` | Espectro normalizado |
-| `<nombre>_crop.fits` | Espectro recortado |
-| `<nombre>_crop_norm.fits` | Espectro recortado y normalizado |
-| `fitted_<linea>.csv` | Parámetros del ajuste gaussiano (centro, σ, FWHM, EW, vr) |
+| `<nombre>_norm.fits` | Espectro 1D normalizado |
+| `<nombre>_crop.fits` | Espectro 1D recortado |
+| `<nombre>_crop_norm.fits` | Espectro 1D recortado y normalizado |
+| `<nombre>_norm.fits` | MULTISPEC con órdenes normalizados reemplazados |
+| `fitted_<linea>.csv` | Parámetros del ajuste: centro, σ, FWHM, EW, vr, bkg\_intercept, bkg\_slope |
 
 ---
 
@@ -106,3 +147,4 @@ Al cerrar, muestra velocidades radiales y anchos equivalentes (EW) para cada gau
 - `lmfit`
 - `scipy`
 - `pandas`
+- `specutils`
