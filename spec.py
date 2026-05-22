@@ -378,7 +378,10 @@ def interactive_normalization(wavelength, flux, filename):
         selection_active[0] = not selection_active[0]
         if selection_active[0]:
             if span_selector[0] is not None:
+                span_selector[0].set_visible(False)
                 span_selector[0].disconnect_events()
+                span_selector[0] = None
+                fig.canvas.draw_idle()
             span_selector[0] = SpanSelector(
                 ax_spec, onselect, 'horizontal',
                 useblit=True,
@@ -389,8 +392,10 @@ def interactive_normalization(wavelength, flux, filename):
             print("  Seleccion ACTIVADA")
         else:
             if span_selector[0] is not None:
+                span_selector[0].set_visible(False)
                 span_selector[0].disconnect_events()
                 span_selector[0] = None
+                fig.canvas.draw_idle()
             print("  Seleccion DESACTIVADA")
 
     # ── Teclado ───────────────────────────────────────────────────────────────
@@ -932,6 +937,28 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             print("="*60)
             print(result.fit_report())
             print("="*60)
+
+            if not result.success:
+                print("\n" + "!"*60)
+                print("  *** AJUSTE NO CONVERGIO (success=False) ***")
+                # Detectar si algun centro esta pegado a sus limites
+                i = 1
+                center_at_bound = False
+                while f'g{i}_center' in result.params:
+                    p = result.params[f'g{i}_center']
+                    at_min = p.min is not None and abs(p.value - p.min) < 1e-6 * (abs(p.min) + 1)
+                    at_max = p.max is not None and abs(p.value - p.max) < 1e-6 * (abs(p.max) + 1)
+                    if at_min or at_max:
+                        bound = "minimo" if at_min else "maximo"
+                        print(f"  *** G{i}: CENTRO EN EL LIMITE {bound.upper()} "
+                              f"({p.value:.4f} A) -- RESULTADO NO CONFIABLE ***")
+                        center_at_bound = True
+                    i += 1
+                if center_at_bound:
+                    print("  *** El centro es el parametro mas critico: "
+                          "los EW y VR calculados son INVALIDOS ***")
+                print("!"*60)
+
             _print_vr_summary(result, vhelio)
 
             update_status()
@@ -1493,7 +1520,10 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             Desactiva cualquier selector previo para evitar handlers duplicados.
             """
             if span_selector[0] is not None:
+                span_selector[0].set_visible(False)
                 span_selector[0].disconnect_events()
+                span_selector[0] = None
+                fig.canvas.draw_idle()
             window_limits[0] = None
             window_limits[1] = None
             span_selector[0] = SpanSelector(
@@ -1567,11 +1597,17 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             fig.canvas.draw_idle()
             print("  Vista reseteada al espectro completo")
 
+        def close_session(action):
+            if span_selector[0] is not None:
+                span_selector[0].disconnect_events()
+                span_selector[0] = None
+            pending[0] = action
+            plt.close(fig)
+
         def on_key(event):
             """Despacha los eventos de teclado a las funciones correspondientes."""
             if event.key.lower() == 'q':
-                pending[0] = 'quit'
-                plt.close(fig)
+                close_session('quit')
             elif event.key.lower() == 'w':
                 activate_window_mode()
             elif event.key == 'enter':
@@ -1579,13 +1615,9 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             elif event.key.lower() == 'z':
                 reset_view()
             elif event.key.lower() == 'n':
-                # Senalar que se debe abrir la normalizacion despues de cerrar
-                pending[0] = 'normalize'
-                plt.close(fig)
+                close_session('normalize')
             elif event.key.lower() == 'd':
-                # Senalar que se debe abrir el ajuste de gaussianas despues de cerrar
-                pending[0] = 'fit_gaussians'
-                plt.close(fig)
+                close_session('fit_gaussians')
             elif event.key.lower() == 'x':
                 save_current()
             elif event.key.lower() == 'h':
@@ -1684,7 +1716,33 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
                     except Exception:
                         pass
                 default_csv = f"fitted_{linename}.csv"
-                save = input(f"\n  Guardar parametros del ajuste en CSV como {default_csv}? [S/n/nombre]: ").strip()
+                if not fit_result.success:
+                    # Comprobar si algun centro esta en el limite
+                    j = 1
+                    center_bad = False
+                    while f'g{j}_center' in fit_result.params:
+                        p = fit_result.params[f'g{j}_center']
+                        at_min = p.min is not None and abs(p.value - p.min) < 1e-6 * (abs(p.min) + 1)
+                        at_max = p.max is not None and abs(p.value - p.max) < 1e-6 * (abs(p.max) + 1)
+                        if at_min or at_max:
+                            center_bad = True
+                            break
+                        j += 1
+                    if center_bad:
+                        print("\n" + "!"*60)
+                        print("  *** ADVERTENCIA: el ajuste FALLO y el/los CENTRO/S estan")
+                        print("      en el limite del rango -- los parametros son INVALIDOS ***")
+                        print("!"*60)
+                        save = input(f"  Guardar igualmente en {default_csv}? [s/N/nombre]: ").strip()
+                        if not save:
+                            save = 'n'
+                    else:
+                        print("\n  AVISO: el ajuste no convergio (success=False). Los parametros pueden ser incorrectos.")
+                        save = input(f"  Guardar de todas formas en {default_csv}? [s/N/nombre]: ").strip()
+                        if not save:
+                            save = 'n'
+                else:
+                    save = input(f"\n  Guardar parametros del ajuste en CSV como {default_csv}? [S/n/nombre]: ").strip()
                 if save.lower() not in ('n', 'no'):
                     if save and save.lower() not in ('s', 'si', 'y', 'yes'):
                         csv_out = save

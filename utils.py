@@ -79,26 +79,6 @@ def read_fits_simple(file_name):
     - ``'wcs_or_bintable'``: intenta WCS primero; si no hay CTYPE1, usa bintable.
     El valor puede ser el nombre exacto o un fragmento (se usa ``in`` para comparar).
     """
-    # Registro de instrumentos: fragmento_nombre → estrategia
-    # Para agregar uno nuevo, añadir aquí una línea.
-    _INSTRUMENTS = {
-        'REOSC'             : 'wcs',
-        'Reosc'             : 'wcs',
-        'Echelle/SITe2K-1'  : 'wcs',
-        'SOPHIE'            : 'wcs',
-        'FEROS'             : 'wcs_or_bintable',
-        'HARPS'             : 'bintable',
-        'HERMES'            : 'bintable',
-        'SES V4.0'          : 'bintable',
-        'CAFE 2.2'          : 'bintable',
-        'HARPN'             : 'bintable',
-        'UVES'              : 'bintable',
-        'GRACES'            : 'bintable',
-        'FIES'              : 'bintable',
-        'VOT2FITS'          : 'bintable',
-    }
-    _WCS_CTYPES = {'LINEAR', 'wavelength', 'WAVELENGTH', 'pixel', 'AWAV'}
-
     def _wave_from_header(hdr):
         """Calcula el eje de longitudes de onda a partir de keywords WCS lineales."""
         start, step, num, ref = (hdr['CRVAL1'], hdr['CDELT1'],
@@ -115,59 +95,55 @@ def read_fits_simple(file_name):
         else:
             data = hdul[1].data
             return data[0][0], data[0][1]
-     
-        
+
     with fits.open(file_name) as hdul:
         hdul[0].verify('fix')
         header = hdul[0].header
-        
+
         if header.get('CTYPE1') == 'MULTISPE':
             raise ValueError("This spectrum is MULTISPEC")
 
         if header.get('PROCSPEC') == 'spec.py':
             return header, _wave_from_header(header), hdul[0].data
 
-        # Buscar INSTRUME en todas las extensiones si no está en la primaria
+        # PARA ESPECTROS SALIDA DE UNWIND
+        if 'COMP' in header:
+            wave, flux = _read_bintable(hdul)
+            return header, wave, flux
+
+        # Buscar header con INSTRUME en extensiones si no está en la primaria
         if 'INSTRUME' not in header:
             for ext in hdul[1:]:
                 if 'INSTRUME' in ext.header:
                     header = ext.header
                     break
-                
-                # PARA ESPECTROS DE UNWIND
-                if 'COMP' in header:
-                    wave, flux = _read_bintable(hdul)
-                    return header, wave, flux
-                
-            else:
-                print('No se encontró keyword INSTRUME en header')
-                return            
 
-        instrument = header['INSTRUME']
+        primary_data = hdul[0].data
 
-        strategy = next(
-            (s for key, s in _INSTRUMENTS.items() if key in instrument),
-            None
-        )
-
-        if strategy is None:
-            print(f'{instrument} no está implementado en esta función')
-            return
-
-        ctype = header.get('CTYPE1')
-
-        if strategy == 'bintable':
-            wave, flux = _read_bintable(hdul)
-            return header, wave, flux
-
-        if strategy in ('wcs', 'wcs_or_bintable'):
-            if ctype in _WCS_CTYPES:
-                return header, _wave_from_header(header), hdul[0].data
-            elif strategy == 'wcs_or_bintable':
+        if primary_data is None:
+            # Sin datos en la primaria → bintable en extensión, WCS como fallback
+            try:
                 wave, flux = _read_bintable(hdul)
                 return header, wave, flux
-            else:
-                raise ValueError('CTYPE1 no coincide con las opciones soportadas')
+            except Exception:
+                pass
+            try:
+                return header, _wave_from_header(header), hdul[0].data
+            except Exception:
+                pass
+        else:
+            # Datos en la primaria → WCS primero, bintable como fallback
+            try:
+                return header, _wave_from_header(header), primary_data
+            except Exception:
+                pass
+            try:
+                wave, flux = _read_bintable(hdul)
+                return header, wave, flux
+            except Exception:
+                pass
+
+        raise ValueError(f"No se pudo leer '{file_name}': ni bintable ni WCS funcionaron")
 
 
 def read_votable(file_name, spectral_col='spectral', flux_col='flux'):

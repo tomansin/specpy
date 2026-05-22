@@ -1,10 +1,11 @@
 # specpy
 
-Visualizador interactivo de espectros estelares en formato FITS.
+Herramientas interactivas para visualización, normalización y análisis de espectros estelares en formato FITS.
 
-Incluye dos scripts:
-- **`spec.py`** — espectros 1D estándar (REOSC, FEROS, HARPS, SOPHIE, HARPN, UVES, etc.)
+Scripts incluidos:
+- **`spec.py`** — espectros 1D (REOSC, FEROS, HARPS, SOPHIE, HERMES, UVES, etc.)
 - **`multispec.py`** — espectros en formato IRAF MULTISPEC (múltiples órdenes)
+- **`votable2fits.py`** — conversión de VOTable a FITS BinTable compatible con `spec.py`
 
 ---
 
@@ -13,6 +14,8 @@ Incluye dos scripts:
 ```bash
 spec.py <archivo.fits> [opciones]
 ```
+
+Lee archivos FITS 1D de cualquier instrumento. Detecta automáticamente si los datos están en la extensión primaria (WCS) o en una extensión BinTable. Los archivos guardados por `spec.py` llevan el keyword `PROCSPEC = 'spec.py'` y son reconocidos directamente al re-abrirlos.
 
 ### Opciones
 
@@ -47,7 +50,7 @@ spec.py <archivo.fits> [opciones]
 
 ### Modo normalización (`n`)
 
-Ajuste de continuo por rangos con interpolación Akima entre rangos múltiples.
+Ajuste de continuo por polinomio Chebyshev con soporte de múltiples rangos. Cuando hay más de un rango los polinomios se unen con interpolación Akima. El panel inferior muestra la previsualización normalizada centrada en flujo = 1 (±10 σ calculado sobre los puntos seleccionados). Al cambiar el orden del polinomio (`+`/`-`) el zoom se preserva.
 
 | Tecla | Acción |
 |-------|--------|
@@ -57,28 +60,26 @@ Ajuste de continuo por rangos con interpolación Akima entre rangos múltiples.
 | `+` / `-` | Subir/bajar orden del polinomio Chebyshev del rango activo |
 | `q` | Confirmar y cerrar (pregunta si guardar) |
 
-Con un solo rango se ajusta un polinomio global. Con varios rangos, los polinomios se unen con interpolación Akima. Las zonas fuera de todos los rangos no se normalizan.
-
 ---
 
 ### Modo ajuste de gaussianas (`d`)
 
-Ajuste de líneas espectrales con modelo gaussiano + **fondo lineal** (`bkg_intercept + bkg_slope × λ`), ambos parámetros libres en el ajuste.
+Ajuste de líneas espectrales con modelo suma de gaussianas + fondo constante (`bkg_c`).
 
-**Flujo de trabajo recomendado:**
+**Flujo de trabajo:**
 
-1. **`w`** — arrastrar para definir la región de continuo **izquierda** de la línea (sombra verde).
-2. **`w`** — arrastrar para definir la región de continuo **derecha** de la línea. Al tener las 2 regiones se ajusta una recta al continuo, que se muestra superpuesta al espectro. El rango de ajuste queda definido automáticamente como el intervalo entre ambas regiones.
-3. **`d`** — 2 clics para definir cada gaussiana:
-   - Clic 1: centro de la línea (x = λ, y = flujo).
+1. **`w`** — arrastrar para definir una región de continuo local. Definir dos regiones (una a cada lado de la línea) ajusta una recta al continuo y la muestra superpuesta.
+2. **`d`** — iniciar una gaussiana; 2 clics:
+   - Clic 1: centro de la línea (x = λ, y = flujo/profundidad).
    - Clic 2: cualquier punto a un lado del centro para definir el FWHM (simétrico).
-4. **`a`** — ejecuta el ajuste lmfit. Las gaussianas y el fondo lineal se ajustan simultáneamente sobre el rango definido.
+3. Repetir paso 2 para cada componente adicional.
+4. **`a`** — ejecuta el ajuste lmfit y muestra el reporte con velocidades radiales y anchos equivalentes.
 
 | Tecla | Acción |
 |-------|--------|
-| `w` | Definir región de continuo (2 drags: izquierda y derecha de la línea) |
+| `w` | Definir región de continuo local (hasta 2 por línea) |
 | `W` | Limpiar regiones de continuo |
-| `d` | Nueva gaussiana (2 clics: centro + un lado del FWHM) |
+| `d` | Nueva gaussiana (2 clics: centro + semiancho) |
 | `a` | Ejecutar ajuste lmfit |
 | `b` | Eliminar última gaussiana definida |
 | `c` | Limpiar todas las gaussianas y el ajuste |
@@ -87,7 +88,7 @@ Ajuste de líneas espectrales con modelo gaussiano + **fondo lineal** (`bkg_inte
 | `escape` | Cancelar gaussiana en construcción |
 | `q` | Cerrar |
 
-Al ajustar, muestra en terminal el reporte lmfit con velocidades radiales (vr) y anchos equivalentes (EW) para cada componente, identificando la línea de reposo más cercana desde `lines.csv`.
+El reporte en terminal incluye velocidad radial (vr) y ancho equivalente (EW) para cada componente, identificando la línea de reposo más cercana desde `lines.csv`. Si alguna vr supera 500 km/s se emite una advertencia antes de guardar.
 
 ---
 
@@ -120,10 +121,29 @@ Al presionar `n` se abre el modo normalización para el orden activo. Dentro de 
 
 | Tecla | Acción |
 |-------|--------|
-| `(` / `)` | Cambiar al orden anterior/siguiente (guarda el normalizado actual automáticamente y hereda las regiones al nuevo orden) |
+| `(` / `)` | Cambiar al orden anterior/siguiente (guarda el normalizado actual y hereda regiones) |
 | `q` | Confirmar y cerrar |
 
-Al presionar `x` o `q` en el visualizador principal, se ofrece guardar un archivo `<nombre>_norm.fits` con los órdenes normalizados reemplazados y los demás intactos. El título muestra `[O N*/total]` donde `*` indica que el orden está normalizado y el número junto a `N` indica cuántos órdenes se normalizaron.
+Al presionar `x` o `q` en el visualizador principal se ofrece guardar `<nombre>_norm.fits` con los órdenes normalizados reemplazados. El título muestra `[O N*/total]` donde `*` indica orden normalizado.
+
+---
+
+## votable2fits.py
+
+Convierte espectros en formato VOTable (como los descargados del VO de Mercator/HERMES) a FITS BinTable compatible con `spec.py`.
+
+```bash
+# Un archivo, salida por defecto (<nombre>_bt.fits)
+votable2fits.py espectro.fits
+
+# Un archivo con salida específica
+votable2fits.py espectro.fits -o salida.fits
+
+# Múltiples archivos con comodín
+votable2fits.py espectros/*.fits
+```
+
+El archivo de salida lleva `INSTRUME = 'VOT2FITS'` y los metadatos SSA mapeados a keywords estándar (`MJD-OBS`, `OBJECT`, `EXPTIME`, etc.).
 
 ---
 
@@ -135,7 +155,8 @@ Al presionar `x` o `q` en el visualizador principal, se ofrece guardar un archiv
 | `<nombre>_crop.fits` | Espectro 1D recortado |
 | `<nombre>_crop_norm.fits` | Espectro 1D recortado y normalizado |
 | `<nombre>_norm.fits` | MULTISPEC con órdenes normalizados reemplazados |
-| `fitted_<linea>.csv` | Parámetros del ajuste: centro, σ, FWHM, EW, vr, bkg\_intercept, bkg\_slope |
+| `<nombre>_bt.fits` | VOTable convertido a FITS BinTable |
+| `fitted_<linea>.csv` | Parámetros del ajuste: centro, σ, FWHM, EW, vr por componente |
 
 ---
 

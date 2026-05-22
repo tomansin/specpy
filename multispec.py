@@ -79,35 +79,47 @@ def load_multispec(filename):
 def interactive_normalization(wavelength, flux, filename,
                                seed_params=None, order_label=None):
     """
-    Interfaz gráfica para normalizar un espectro por ajuste de continuo.
+    Normalización interactiva para un orden MULTISPEC.
 
-    Igual a la de spec.py pero con soporte para navegar entre órdenes:
-      (  → orden anterior   )  → orden siguiente
+    Ajusta un único polinomio Chebyshev a todo el rango espectral.
+    El usuario puede excluir regiones (líneas espectrales) con el SpanSelector.
 
     Parameters
     ----------
-    seed_params : list of dict, optional
-        Lista de {'regions': [[w1,w2],...], 'poly_order': n} con la que
-        pre-poblar los rangos (herencia del orden anterior).
+    seed_params : int or None
+        Orden del polinomio heredado del orden anterior.  None → usa 5.
     order_label : str, optional
-        Texto adicional para el título (p. ej. '[O 5/26]').
+        Texto adicional para el título.
 
     Returns
     -------
     norm_flux : ndarray or None
     action    : 'done' | 'prev_order' | 'next_order'
-    seed_out  : list of dict  (parámetros para pasar al siguiente orden)
+    poly_order_out : int   (orden del polinomio, para heredar al siguiente orden)
     """
     fig = plt.figure(figsize=(12, 8))
     gs = GridSpec(5, 1)
     ax_spec = fig.add_subplot(gs[:3, 0])
     ax_norm = fig.add_subplot(gs[3:, 0], sharex=ax_spec)
 
-    ranges = []
-    current_poly_order = [5]
+    if isinstance(seed_params, dict):
+        _init_order = seed_params.get('poly_order', 5)
+        _init_excl  = seed_params.get('excluded_regions', [])
+    elif isinstance(seed_params, int):
+        _init_order = seed_params
+        _init_excl  = []
+    else:
+        _init_order = 5
+        _init_excl  = []
+
+    poly_order = [_init_order]
+    excluded_regions = []   # [[wmin, wmax], ...] — intervalos excluidos del fit
+    excluded_patches = []   # axvspan grises
+    continuum_line = [None]
+    fit_model = [None]
+    reject_scatter = [None]
     span_selector = [None]
     selection_active = [False]
-    continuum_line = [None]
     order_action = [None]
 
     title_base = f'Normalizacion: {os.path.basename(filename)}'
@@ -131,247 +143,123 @@ def interactive_normalization(wavelength, flux, filename,
     ax_norm.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Referencia (1.0)')
     ax_norm.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
 
-    # ── Helpers internos ──────────────────────────────────────────────────────
+    # ── Fit y display ─────────────────────────────────────────────────────────
 
-    def range_span(r):
-        return (min(reg[0] for reg in r['regions']),
-                max(reg[1] for reg in r['regions']))
+    def _refit():
+        """Ajusta Chebyshev al rango completo menos las regiones excluidas."""
+        if reject_scatter[0] is not None:
+            try:
+                reject_scatter[0].remove()
+            except Exception:
+                pass
+            reject_scatter[0] = None
 
-    def refit_range(r, ridx):
-        if r['poly_line'] is not None:
-            r['poly_line'].remove(); r['poly_line'] = None
-        if r['reject_scatter'] is not None:
-            r['reject_scatter'].remove(); r['reject_scatter'] = None
-        if not r['regions']:
-            r['fit_model'] = None; return
-        mask = mask_generator(wavelength, r['regions'])
-        n_pts = int(np.sum(mask))
-        if n_pts <= r['poly_order'] + 1:
-            r['fit_model'] = None; return
+        mask = np.ones(len(wavelength), dtype=bool)
+        for wmin, wmax in excluded_regions:
+            mask &= ~((wavelength >= wmin) & (wavelength <= wmax))
+        if int(np.sum(mask)) <= poly_order[0] + 1:
+            fit_model[0] = None
+            return
         try:
             cont_model, reject, _ = fit_cont_sigma(
                 wavelength[mask], flux[mask],
-                model='chebyshev', order=r['poly_order'],
+                model='chebyshev', order=poly_order[0],
                 use_sigma_clip=True, sigma_lower=3, sigma_upper=3)
-            r['fit_model'] = cont_model
-            r['reject'] = reject
-        except Exception:
-            r['fit_model'] = None; return
-        wmin, wmax = range_span(r)
-        x_plot = np.linspace(wmin, wmax, 500)
-        is_active = (ridx == len(ranges) - 1)
-        label = f'R{ridx+1} ord{r["poly_order"]} (pol activo)' if is_active else '_nolegend_'
-        r['poly_line'], = ax_spec.plot(x_plot, cont_model(x_plot),
-                                        color='red', linewidth=2, linestyle='--',
-                                        alpha=0.85, label=label)
-        if reject is not None and len(reject[0]) > 0:
-            r['reject_scatter'] = ax_spec.scatter(
-                reject[0], reject[1], c='green', s=12, alpha=0.5, marker='x', zorder=5)
+            fit_model[0] = cont_model
+            if reject is not None and len(reject[0]) > 0:
+                reject_scatter[0] = ax_spec.scatter(
+                    reject[0], reject[1],
+                    c='green', s=14, alpha=0.6, marker='x', zorder=5)
+        except Exception as e:
+            print(f'  Error ajuste: {e}')
+            fit_model[0] = None
 
-    def build_continuum():
-        valid = [r for r in ranges if r.get('fit_model') is not None]
-        if not valid:
-            return None
-        if len(valid) == 1:
-            return valid[0]['fit_model'](wavelength)
-        all_x, all_y = [], []
-        for r in valid:
-            wmin, wmax = range_span(r)
-            n_pts = max(80, int((wmax - wmin) / (wavelength[-1] - wavelength[0]) * 800))
-            x_r = np.linspace(wmin, wmax, n_pts)
-            all_x.append(x_r); all_y.append(r['fit_model'](x_r))
-        all_x = np.concatenate(all_x); all_y = np.concatenate(all_y)
-        order = np.argsort(all_x); all_x, all_y = all_x[order], all_y[order]
-        _, uidx = np.unique(all_x, return_index=True)
-        all_x, all_y = all_x[uidx], all_y[uidx]
-        if len(all_x) < 4:
-            return None
-        try:
-            interp = Akima1DInterpolator(all_x, all_y)
-            continuum = np.ones(len(wavelength))
-            in_span = (wavelength >= all_x[0]) & (wavelength <= all_x[-1])
-            continuum[in_span] = interp(wavelength[in_span])
-            return continuum
-        except Exception:
-            return None
-
-    def update_display(preserve_view=False):
+    def _update(preserve_view=False):
         if preserve_view:
-            saved_xlim      = ax_spec.get_xlim()
-            saved_ylim_spec = ax_spec.get_ylim()
+            sx, sy = ax_spec.get_xlim(), ax_spec.get_ylim()
         if continuum_line[0] is not None:
             continuum_line[0].remove(); continuum_line[0] = None
-        continuum = build_continuum()
-        if continuum is not None:
-            valid = [r for r in ranges if r.get('fit_model') is not None]
-            wmin_all = min(range_span(r)[0] for r in valid)
-            wmax_all = max(range_span(r)[1] for r in valid)
-            draw_mask = (wavelength >= wmin_all) & (wavelength <= wmax_all)
+        if fit_model[0] is not None:
             continuum_line[0], = ax_spec.plot(
-                wavelength[draw_mask], continuum[draw_mask], 'r-', linewidth=2, alpha=0.9)
+                wavelength, fit_model[0](wavelength), 'r-', linewidth=2, alpha=0.9)
         ax_spec.legend(loc='best')
+
         ax_norm.clear()
         ax_norm.set_xlabel('Wavelength (A)', fontsize=12)
         ax_norm.set_ylabel('Flujo normalizado', fontsize=12)
         ax_norm.set_title('Previsualizacion normalizada', fontsize=14, fontweight='bold')
         ax_norm.grid(True, alpha=0.3, linestyle='--')
-        ax_norm.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Referencia (1.0)')
+        ax_norm.axhline(y=1, color='red', linestyle='--', alpha=0.5)
         ax_norm.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
-        if continuum is not None:
-            norm_flux = flux / continuum
-            ax_norm.plot(wavelength, norm_flux, 'k-', linewidth=1.5, label='Normalizado')
-            region_mask = np.zeros(len(wavelength), dtype=bool)
-            for r in ranges:
-                if r['regions']:
-                    region_mask |= mask_generator(wavelength, r['regions'])
-            if np.any(region_mask):
-                s = np.std(norm_flux[region_mask]); s = s if s > 0 else 0.05
-                ax_norm.set_ylim(1 - 15 * s, 1 + 5 * s)
-        ax_norm.legend(loc='best')
+        if fit_model[0] is not None:
+            nfl = flux / fit_model[0](wavelength)
+            ax_norm.plot(wavelength, nfl, 'k-', linewidth=1.5)
+            mask = np.ones(len(wavelength), dtype=bool)
+            for wmin, wmax in excluded_regions:
+                mask &= ~((wavelength >= wmin) & (wavelength <= wmax))
+            if np.any(mask):
+                s = max(np.std(nfl[mask]), 0.01)
+                ax_norm.set_ylim(1 - 10*s, 1 + 5*s)
+
         if preserve_view:
-            ax_spec.set_xlim(saved_xlim); ax_spec.set_ylim(saved_ylim_spec)
+            ax_spec.set_xlim(sx); ax_spec.set_ylim(sy)
         fig.canvas.draw_idle()
 
-    def seal_range(r):
-        if r.get('poly_line') is not None:
-            r['poly_line'].set_label('_nolegend_')
-        for patch in r['region_patches']:
-            try: patch.remove()
-            except Exception: pass
-        r['region_patches'].clear()
-        if r.get('used_points_handle') is not None:
-            try: r['used_points_handle'].remove()
-            except Exception: pass
-        if r['regions']:
-            mask = mask_generator(wavelength, r['regions'])
-            r['used_points_handle'], = ax_spec.plot(
-                wavelength[mask], flux[mask],
-                'b+', markersize=5, alpha=0.6, zorder=3, label='_nolegend_')
-        else:
-            r['used_points_handle'] = None
+    def _refit_and_update():
+        _refit(); _update(preserve_view=True)
 
-    def activate_range(r, _ridx=None):
-        if r.get('used_points_handle') is not None:
-            try: r['used_points_handle'].remove()
-            except Exception: pass
-            r['used_points_handle'] = None
-        for region in r['regions']:
-            patch = ax_spec.axvspan(region[0], region[1], alpha=0.15, color='red', zorder=0)
-            r['region_patches'].append(patch)
+    # ── SpanSelector para exclusiones ─────────────────────────────────────────
 
-    def _prepopulate(seed_params):
-        wmin_data, wmax_data = wavelength[0], wavelength[-1]
-        valid_seeds = []
-        for sp in seed_params:
-            valid_regions = [
-                [max(r[0], wmin_data), min(r[1], wmax_data)]
-                for r in sp['regions']
-                if r[0] < wmax_data and r[1] > wmin_data
-            ]
-            if valid_regions:
-                valid_seeds.append({'regions': valid_regions, 'poly_order': sp['poly_order']})
-        if not valid_seeds:
-            return
-        for i, sp in enumerate(valid_seeds):
-            r = {'regions': list(sp['regions']), 'poly_order': sp['poly_order'],
-                 'fit_model': None, 'reject': None, 'poly_line': None,
-                 'reject_scatter': None, 'region_patches': [], 'used_points_handle': None}
-            for region in sp['regions']:
-                patch = ax_spec.axvspan(region[0], region[1], alpha=0.15, color='red', zorder=0)
-                r['region_patches'].append(patch)
-            ranges.append(r)
-            refit_range(r, len(ranges) - 1)
-            if i < len(valid_seeds) - 1:
-                seal_range(r)
-        current_poly_order[0] = valid_seeds[-1]['poly_order']
-
-    def onselect(xmin, xmax):
+    def _onselect_excl(xmin, xmax):
         if xmin > xmax: xmin, xmax = xmax, xmin
-        if not ranges:
-            ranges.append({'regions': [], 'poly_order': current_poly_order[0],
-                           'fit_model': None, 'reject': None, 'poly_line': None,
-                           'reject_scatter': None, 'region_patches': [],
-                           'used_points_handle': None})
-        r = ranges[-1]; ridx = len(ranges) - 1
-        r['regions'].append([xmin, xmax])
-        patch = ax_spec.axvspan(xmin, xmax, alpha=0.15, color='red', zorder=0)
-        r['region_patches'].append(patch)
-        refit_range(r, ridx)
-        update_display(preserve_view=True)
+        excluded_regions.append([xmin, xmax])
+        excluded_patches.append(
+            ax_spec.axvspan(xmin, xmax, alpha=0.3, color='gray', zorder=1))
+        print(f'  Excluido [{xmin:.2f}, {xmax:.2f}] A  '
+              f'({len(excluded_regions)} exclusion(es))')
+        _refit_and_update()
 
-    def toggle_selection():
+    def _toggle_selection():
         selection_active[0] = not selection_active[0]
         if selection_active[0]:
             if span_selector[0] is not None:
                 span_selector[0].disconnect_events()
             span_selector[0] = SpanSelector(
-                ax_spec, onselect, 'horizontal', useblit=True,
-                props=dict(alpha=0.2, facecolor='red'),
+                ax_spec, _onselect_excl, 'horizontal', useblit=True,
+                props=dict(alpha=0.25, facecolor='gray'),
                 interactive=True, drag_from_anywhere=True)
-            print("  Seleccion ACTIVADA")
+            print('  Seleccion de EXCLUSION activada (arrastra sobre lineas a ignorar)')
         else:
             if span_selector[0] is not None:
                 span_selector[0].disconnect_events(); span_selector[0] = None
-            print("  Seleccion DESACTIVADA")
+            print('  Seleccion desactivada')
+
+    # ── Teclado ───────────────────────────────────────────────────────────────
 
     def on_key(event):
         if event.key == 'a':
-            toggle_selection()
-
-        elif event.key == 'b':
-            if not ranges or not ranges[-1]['regions']:
-                print("  Define al menos una region antes de crear un nuevo rango.")
-                return
-            seal_range(ranges[-1])
-            current_poly_order[0] = 5
-            ridx_new = len(ranges)
-            ranges.append({'regions': [], 'poly_order': current_poly_order[0],
-                           'fit_model': None, 'reject': None, 'poly_line': None,
-                           'reject_scatter': None, 'region_patches': [],
-                           'used_points_handle': None})
-            print(f"  Rango {ridx_new} sellado. Rango {ridx_new + 1} activo.")
-            fig.canvas.draw_idle()
+            _toggle_selection()
 
         elif event.key == 'e':
-            if not ranges: return
-            r = ranges[-1]; ridx = len(ranges) - 1
-            if not r['regions']:
-                ranges.pop()
-                print(f"  Rango {ridx + 1} (vacio) eliminado.")
-                if ranges: activate_range(ranges[-1], len(ranges) - 1)
-                update_display(preserve_view=True)
-                return
-            patch = r['region_patches'].pop(); patch.remove()
-            removed = r['regions'].pop()
-            print(f"  Region [{removed[0]:.2f}, {removed[1]:.2f}] A eliminada.")
-            if r['regions']:
-                refit_range(r, ridx)
+            if excluded_regions:
+                excluded_regions.pop()
+                patch = excluded_patches.pop()
+                try: patch.remove()
+                except Exception: pass
+                print(f'  Ultima exclusion eliminada. Quedan {len(excluded_regions)}.')
+                _refit_and_update()
             else:
-                if r['poly_line'] is not None:
-                    r['poly_line'].remove(); r['poly_line'] = None
-                if r['reject_scatter'] is not None:
-                    r['reject_scatter'].remove(); r['reject_scatter'] = None
-                ranges.pop()
-                if ranges: activate_range(ranges[-1], len(ranges) - 1)
-            update_display(preserve_view=True)
+                print('  No hay exclusiones.')
 
         elif event.key in ('+', '='):
-            if ranges:
-                r = ranges[-1]
-                r['poly_order'] = min(r['poly_order'] + 1, 20)
-                current_poly_order[0] = r['poly_order']
-                print(f"  Orden R{len(ranges)}: {r['poly_order']}")
-                refit_range(r, len(ranges) - 1)
-                update_display(preserve_view=True)
+            poly_order[0] = min(poly_order[0] + 1, 20)
+            print(f'  Orden polinomio: {poly_order[0]}')
+            _refit_and_update()
 
         elif event.key == '-':
-            if ranges:
-                r = ranges[-1]
-                r['poly_order'] = max(r['poly_order'] - 1, 0)
-                current_poly_order[0] = r['poly_order']
-                print(f"  Orden R{len(ranges)}: {r['poly_order']}")
-                refit_range(r, len(ranges) - 1)
-                update_display(preserve_view=True)
+            poly_order[0] = max(poly_order[0] - 1, 0)
+            print(f'  Orden polinomio: {poly_order[0]}')
+            _refit_and_update()
 
         elif event.key in ('(', ')'):
             order_action[0] = 'prev_order' if event.key == '(' else 'next_order'
@@ -395,64 +283,53 @@ def interactive_normalization(wavelength, flux, filename,
     fig.canvas.mpl_connect('scroll_event', on_scroll)
 
     print("\n" + "="*60)
-    print("MODO NORMALIZACION")
+    print("MODO NORMALIZACION MULTISPEC")
     print("="*60)
-    print("  a         activar/desactivar seleccion de regiones")
-    print("  b         sellar rango activo e iniciar nuevo rango")
-    print("  e         eliminar ultima region")
-    print("  +/-       subir/bajar orden del polinomio")
+    print(f"  Orden polinomio inicial: {poly_order[0]}")
+    print("  a         activar/desactivar exclusion de regiones (arrastra en gris)")
+    print("  e         eliminar ultima exclusion")
+    print("  +/-       subir/bajar orden del polinomio Chebyshev")
     print("  (/)       orden anterior/siguiente (guarda automaticamente)")
     print("  q         confirmar y cerrar")
     print("="*60)
 
-    if seed_params:
-        _prepopulate(seed_params)
-        update_display()
+    # Pre-poblar exclusiones del orden si las había
+    for wmin, wmax in _init_excl:
+        wmin_c = max(float(wmin), float(wavelength[0]))
+        wmax_c = min(float(wmax), float(wavelength[-1]))
+        if wmin_c < wmax_c:
+            excluded_regions.append([wmin_c, wmax_c])
+            excluded_patches.append(
+                ax_spec.axvspan(wmin_c, wmax_c, alpha=0.3, color='gray', zorder=1))
 
+    _refit()
+    _update()
     plt.tight_layout()
     plt.show()
 
-    # ── Helpers de calculo ────────────────────────────────────────────────────
-    def _extract_seed():
-        return [{'regions': list(r['regions']), 'poly_order': r['poly_order']}
-                for r in ranges if r['regions']]
-
+    # ── Post-show ─────────────────────────────────────────────────────────────
     def _compute_norm():
-        valid = [r for r in ranges if r['regions']]
-        if not valid:
+        _refit()
+        if fit_model[0] is None:
             return None
-        for r in valid:
-            mask = mask_generator(wavelength, r['regions'])
-            if np.sum(mask) > r['poly_order'] + 1:
-                try:
-                    cont_model, _, _ = fit_cont_sigma(
-                        wavelength[mask], flux[mask],
-                        model='chebyshev', order=r['poly_order'],
-                        use_sigma_clip=True)
-                    r['fit_model'] = cont_model
-                except Exception:
-                    r['fit_model'] = None
-            else:
-                r['fit_model'] = None
-        continuum = build_continuum()
-        return flux / continuum if continuum is not None else None
+        return flux / fit_model[0](wavelength)
 
-    # ── Calculo final ─────────────────────────────────────────────────────────
-    seed_out = _extract_seed()
+    params_out = {'poly_order': poly_order[0],
+                  'excluded_regions': list(excluded_regions)}
 
     if order_action[0] in ('prev_order', 'next_order'):
-        return _compute_norm(), order_action[0], seed_out
+        return _compute_norm(), order_action[0], params_out
 
-    valid_ranges = [r for r in ranges if r['regions']]
-    if not valid_ranges:
-        return None, 'done', seed_out
+    if fit_model[0] is None:
+        return None, 'done', params_out
 
     resp = input("  Guardar normalizacion? [S/n]: ").strip().lower()
     if resp in ('n', 'no'):
         print("  Normalizacion descartada.")
-        return None, 'done', seed_out
+        return None, 'done', params_out
 
-    return _compute_norm(), 'done', seed_out
+    return _compute_norm(), 'done', params_out
+
 
 
 # ---------------------------------------------------------------------------
@@ -486,11 +363,11 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
     """
     norders = all_wavelengths.shape[0]
     norm_fluxes = {}          # {order_idx: norm_flux}
+    order_norm_params = {}    # {order_idx: {'poly_order': int, 'excluded_regions': [...]}}
     current_order = [0]
     current = [all_wavelengths[0].copy(), all_fluxes[0].copy()]
     is_normalized = [False]
     is_windowed = [False]
-    _norm_seed = [None]
 
     hjd_value = None
     for key in HJD_KEYS:
@@ -688,10 +565,11 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
             fl_orig = all_fluxes[idx]
             ol = order_label()
             while True:
-                norm_fl, norm_action, _norm_seed[0] = interactive_normalization(
+                norm_fl, norm_action, saved_params = interactive_normalization(
                     wl_orig, fl_orig, filename,
-                    seed_params=_norm_seed[0],
+                    seed_params=order_norm_params.get(idx),
                     order_label=ol)
+                order_norm_params[idx] = saved_params
                 if norm_fl is not None:
                     norm_fluxes[idx] = norm_fl
                     current[0] = all_wavelengths[idx]
