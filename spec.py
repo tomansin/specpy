@@ -28,6 +28,20 @@ from specpy.utils import (read_fits_simple, fit_cont_sigma,
 # Claves de cabecera FITS aceptadas como tiempo heliocentrizo/baricentrico.
 # Se prueban en orden; se usa la primera que se encuentre.
 HJD_KEYS = ['HJD', 'JD', 'MJD', 'MJD-OBS', 'OHP DRS BJD', 'I-HJD', 'MJDATE']
+_MJD_KEYS = {'MJD', 'MJD-OBS', 'MJDATE'}
+
+
+def time_to_hjd(key, value):
+    """Convierte el valor de tiempo del header a escala HJD (JD heliocentrico).
+
+    MJD y variantes: suma 2400000.5 para pasar a JD.
+    JD, BJD, HJD: se usan directamente (la correccion heliocentrica requiere
+    coordenadas de la estrella y no se puede calcular aqui).
+    Devuelve (hjd, nota) donde nota describe la conversion aplicada.
+    """
+    if key in _MJD_KEYS:
+        return value + 2400000.5, f"{key} + 2400000.5"
+    return value, key
 
 
 def load_spectrum(filename):
@@ -60,7 +74,7 @@ def load_spectrum(filename):
         hjd_key_used = None
         for key in HJD_KEYS:
             if key in header:
-                hjd_value = header[key]
+                hjd_value, hjd_nota = time_to_hjd(key, header[key])
                 hjd_key_used = key
                 break
 
@@ -69,7 +83,7 @@ def load_spectrum(filename):
             return header, wavelength, flux
 
         if hjd_value:
-            print(f"  HJD ({hjd_key_used}): {hjd_value}")
+            print(f"  HJD ({hjd_nota}): {hjd_value!r}")
             return header, wavelength, flux
 
     except FileNotFoundError:
@@ -97,6 +111,8 @@ def interactive_normalization(wavelength, flux, filename):
       e         eliminar ultima region del rango activo;
                 si queda vacio, elimina el rango
       +/-       subir/bajar orden del polinomio del rango activo
+      arriba/abajo    subir/bajar sigma_lower (paso 0.5)
+      derecha/izq     subir/bajar sigma_upper (paso 0.5)
       q         confirmar y cerrar
 
     Parameters
@@ -119,6 +135,8 @@ def interactive_normalization(wavelength, flux, filename):
     #             'poly_line', 'reject_scatter', 'region_patches'
     ranges = []
     current_poly_order = [5]   # orden heredado por nuevos rangos
+    sigma_lower = [3.0]
+    sigma_upper = [3.0]
     span_selector = [None]
     selection_active = [False]
     continuum_line = [None]    # linea roja del continuo final en ax_spec
@@ -175,7 +193,7 @@ def interactive_normalization(wavelength, flux, filename):
             cont_model, reject, _ = fit_cont_sigma(
                 wavelength[mask], flux[mask],
                 model='chebyshev', order=r['poly_order'],
-                use_sigma_clip=True, sigma_lower=3, sigma_upper=3
+                use_sigma_clip=True, sigma_lower=sigma_lower[0], sigma_upper=sigma_upper[0]
             )
             r['fit_model'] = cont_model
             r['reject'] = reject
@@ -476,6 +494,34 @@ def interactive_normalization(wavelength, flux, filename):
                 refit_range(r, len(ranges) - 1)
                 update_display(preserve_view=True)
 
+        elif event.key == 'up':
+            sigma_lower[0] = round(sigma_lower[0] + 0.5, 1)
+            print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
+            for i, r in enumerate(ranges):
+                refit_range(r, i)
+            update_display(preserve_view=True)
+
+        elif event.key == 'down':
+            sigma_lower[0] = max(0.5, round(sigma_lower[0] - 0.5, 1))
+            print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
+            for i, r in enumerate(ranges):
+                refit_range(r, i)
+            update_display(preserve_view=True)
+
+        elif event.key == 'right':
+            sigma_upper[0] = round(sigma_upper[0] + 0.5, 1)
+            print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
+            for i, r in enumerate(ranges):
+                refit_range(r, i)
+            update_display(preserve_view=True)
+
+        elif event.key == 'left':
+            sigma_upper[0] = max(0.5, round(sigma_upper[0] - 0.5, 1))
+            print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
+            for i, r in enumerate(ranges):
+                refit_range(r, i)
+            update_display(preserve_view=True)
+
         elif event.key == 'q':
             if span_selector[0] is not None:
                 span_selector[0].disconnect_events()
@@ -502,6 +548,8 @@ def interactive_normalization(wavelength, flux, filename):
     print("  b         sellar rango activo e iniciar nuevo rango")
     print("  e         eliminar ultima region (elimina rango si queda vacio)")
     print("  +/-       subir/bajar orden del polinomio del rango activo")
+    print("  arr.arriba/abajo   subir/bajar sigma_lower (paso 0.5)")
+    print("  arr.der/izq        subir/bajar sigma_upper (paso 0.5)")
     print("  q         confirmar y cerrar")
     print("="*60)
 
@@ -526,7 +574,7 @@ def interactive_normalization(wavelength, flux, filename):
                 cont_model, _, _ = fit_cont_sigma(
                     wavelength[mask], flux[mask],
                     model='chebyshev', order=r['poly_order'],
-                    use_sigma_clip=True
+                    use_sigma_clip=True, sigma_lower=sigma_lower[0], sigma_upper=sigma_upper[0]
                 )
                 r['fit_model'] = cont_model
             except Exception as e:

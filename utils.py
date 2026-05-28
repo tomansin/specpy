@@ -1366,6 +1366,10 @@ def save_spectrum_fits(out_path, header, wavelength, flux):
         if key in new_header:
             del new_header[key]
 
+    for key in ['CTYPE1', 'CTYPE2']:
+        if key in new_header and str(new_header[key]).startswith('MULTISPE'):
+            del new_header[key]
+
     new_header['NAXIS'] = 1
     new_header['NAXIS1'] = len(wavelength)
     new_header['CRPIX1'] = 1
@@ -1382,7 +1386,7 @@ def save_spectrum_fits(out_path, header, wavelength, flux):
             del new_header['DC-FLAG']
 
     hdu = fits.PrimaryHDU(flux.astype(np.float32), header=new_header)
-    hdu.writeto(out_path, overwrite=True)
+    hdu.writeto(out_path, overwrite=True, output_verify='fix')
 
 
 def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=None):
@@ -1406,7 +1410,7 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=
 
     data_dict = {
         'filename': [os.path.basename(filename)],
-        'hjd':      [f"{hjd_value:.6f}"],
+        'hjd':      [hjd_value],
         'vhelio':   [f"{vhelio:.6f}"],
         'chi2_red': [f"{result.redchi:.4f}"],
         'success':  [result.success],
@@ -1574,7 +1578,7 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=
 
     print(f"\n  Resumen guardado:")
     print(f"    Archivo:    {os.path.basename(filename)}")
-    print(f"    HJD:        {hjd_value:.6f}")
+    print(f"    HJD:        {hjd_value!r}")
     print(f"    Gaussianas: {n_gauss}")
     print(f"    chi2/nu:    {result.redchi:.4e}")
     print(f"    CSV:        {os.path.abspath(csv_filename)}")
