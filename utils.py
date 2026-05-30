@@ -1,4 +1,4 @@
-#!/home/tansin/miniconda3/envs/spec/bin/python
+#!/home/tansin/.conda/envs/spec/bin/python
 # -*- coding: utf-8 -*-
 """
 utils.py — Utilidades para lectura, procesamiento y ajuste de espectros estelares.
