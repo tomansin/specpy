@@ -1,4 +1,4 @@
-#!/home/tansin/.conda/envs/spec/bin/python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 multispec.py - Visualizador interactivo de espectros FITS en formato MULTISPEC.
