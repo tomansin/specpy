@@ -26,7 +26,7 @@ from specpy.utils import (read_fits_multi, fit_cont_sigma, mask_generator,
                           find_closest_line, vr, vrerr,
                           gaussian, fit_lines)
 from spec import (interactive_gaussian_fitting, _print_vr_summary,
-                  VR_WARNING_THRESHOLD, HJD_KEYS)
+                  VR_WARNING_THRESHOLD, HJD_KEYS, time_to_hjd)
 
 
 # ---------------------------------------------------------------------------
@@ -52,16 +52,15 @@ def load_multispec(filename):
         print(f"  Puntos  : {all_wavelengths.shape[1]} por orden")
 
         hjd_value = None
-        hjd_key_used = None
+        hjd_nota = None
         for key in HJD_KEYS:
             if key in header:
-                hjd_value = header[key]
-                hjd_key_used = key
+                hjd_value, hjd_nota = time_to_hjd(key, header[key])
                 break
         if hjd_value is None:
             print("  WARNING: No HJD keyword found in header")
         else:
-            print(f"  HJD ({hjd_key_used}): {hjd_value}")
+            print(f"  HJD ({hjd_nota}): {hjd_value:.10f}")
 
         return header, all_wavelengths, all_fluxes
     except FileNotFoundError:
@@ -372,7 +371,7 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
     hjd_value = None
     for key in HJD_KEYS:
         if key in header:
-            hjd_value = header[key]
+            hjd_value, _ = time_to_hjd(key, header[key])
             break
     vhelio = float(header['VHELIO']) if 'VHELIO' in header else 0.0
 

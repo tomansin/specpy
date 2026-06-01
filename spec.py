@@ -35,12 +35,15 @@ def time_to_hjd(key, value):
     """Convierte el valor de tiempo del header a escala HJD (JD heliocentrico).
 
     MJD y variantes: suma 2400000.5 para pasar a JD.
-    JD, BJD, HJD: se usan directamente (la correccion heliocentrica requiere
-    coordenadas de la estrella y no se puede calcular aqui).
+    JD/HJD/BJD con valor < 2400000: se trata como JD reducido (JD - 2400000)
+    y se suma 2400000. JD 2400000 corresponde al año 1858, por lo que ningun
+    dato moderno deberia tener un valor menor en escala completa.
     Devuelve (hjd, nota) donde nota describe la conversion aplicada.
     """
     if key in _MJD_KEYS:
         return value + 2400000.5, f"{key} + 2400000.5"
+    if value < 2400000:
+        return value + 2400000.0, f"{key} + 2400000"
     return value, key
 
 
@@ -71,20 +74,17 @@ def load_spectrum(filename):
 
         # Buscar clave de tiempo HJD/JD en la cabecera
         hjd_value = None
-        hjd_key_used = None
+        hjd_nota = None
         for key in HJD_KEYS:
             if key in header:
                 hjd_value, hjd_nota = time_to_hjd(key, header[key])
-                hjd_key_used = key
                 break
 
         if hjd_value is None:
             print("\nWARNING: No HJD or similar keyword found in header")
-            return header, wavelength, flux
-
-        if hjd_value:
-            print(f"  HJD ({hjd_nota}): {hjd_value!r}")
-            return header, wavelength, flux
+        else:
+            print(f"  HJD ({hjd_nota}): {hjd_value:.10f}")
+        return header, wavelength, flux
 
     except FileNotFoundError:
         print(f"Error: File '{filename}' not found")
@@ -1462,7 +1462,7 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
     hjd_value = None
     for key in HJD_KEYS:
         if key in header:
-            hjd_value = header[key]
+            hjd_value, _ = time_to_hjd(key, header[key])
             break
     vhelio = float(header['VHELIO']) if 'VHELIO' in header else 0.0
 

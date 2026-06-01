@@ -1410,7 +1410,7 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=
 
     data_dict = {
         'filename': [os.path.basename(filename)],
-        'hjd':      [hjd_value],
+        'hjd':      [f"{hjd_value:.10f}"],
         'vhelio':   [f"{vhelio:.6f}"],
         'chi2_red': [f"{result.redchi:.4f}"],
         'success':  [result.success],
@@ -1578,7 +1578,7 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=
 
     print(f"\n  Resumen guardado:")
     print(f"    Archivo:    {os.path.basename(filename)}")
-    print(f"    HJD:        {hjd_value!r}")
+    print(f"    HJD:        {hjd_value:.10f}")
     print(f"    Gaussianas: {n_gauss}")
     print(f"    chi2/nu:    {result.redchi:.4e}")
     print(f"    CSV:        {os.path.abspath(csv_filename)}")
