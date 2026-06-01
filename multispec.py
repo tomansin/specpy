@@ -373,7 +373,17 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
         if key in header:
             hjd_value, _ = time_to_hjd(key, header[key])
             break
-    vhelio = float(header['VHELIO']) if 'VHELIO' in header else 0.0
+    if 'VHELIO' in header:
+        vhelio_raw = float(header['VHELIO'])
+        resp = input(f"  VHELIO = {vhelio_raw:.4f} km/s encontrado en el header. "
+                     f"¿Aplicar corrección heliocentrica? [S/n]: ").strip().lower()
+        vhelio = vhelio_raw if resp not in ('n', 'no') else 0.0
+        if vhelio == 0.0:
+            print("  Corrección heliocentrica NO aplicada (eje espectral ya corregido).")
+        else:
+            print(f"  Corrección heliocentrica aplicada: vhelio = {vhelio:.4f} km/s")
+    else:
+        vhelio = 0.0
 
     def order_label():
         n = len(norm_fluxes)

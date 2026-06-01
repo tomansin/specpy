@@ -1107,6 +1107,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         else:
             _fit_bkg_line()
             if bkg_span[0] is not None:
+                bkg_span[0].set_visible(False)
                 bkg_span[0].disconnect_events()
                 bkg_span[0] = None
         update_status()
@@ -1138,6 +1139,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         bkg_regions.clear()
         bkg_coeffs[0] = None
         if bkg_span[0] is not None:
+            bkg_span[0].set_visible(False)
             bkg_span[0].disconnect_events()
             bkg_span[0] = None
         for patch in bkg_patches:
@@ -1266,6 +1268,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
 
         elif event.key == 'w':
             if bkg_span[0] is not None:
+                bkg_span[0].set_visible(False)
                 bkg_span[0].disconnect_events()
             bkg_span[0] = SpanSelector(
                 ax, _onselect_bkg, 'horizontal', useblit=True,
@@ -1464,7 +1467,17 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
         if key in header:
             hjd_value, _ = time_to_hjd(key, header[key])
             break
-    vhelio = float(header['VHELIO']) if 'VHELIO' in header else 0.0
+    if 'VHELIO' in header:
+        vhelio_raw = float(header['VHELIO'])
+        resp = input(f"  VHELIO = {vhelio_raw:.4f} km/s encontrado en el header. "
+                     f"¿Aplicar corrección heliocentrica? [S/n]: ").strip().lower()
+        vhelio = vhelio_raw if resp not in ('n', 'no') else 0.0
+        if vhelio == 0.0:
+            print("  Corrección heliocentrica NO aplicada (eje espectral ya corregido).")
+        else:
+            print(f"  Corrección heliocentrica aplicada: vhelio = {vhelio:.4f} km/s")
+    else:
+        vhelio = 0.0
 
     # Estado persistente entre sesiones.
     # Se usan listas de un elemento para permitir mutacion desde closures anidados.
