@@ -1528,45 +1528,28 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=
     if os.path.exists(csv_filename):
         try:
             df_existing = pd.read_csv(csv_filename)
-            existing_cols = set(df_existing.columns)
-            new_cols = set(df_new.columns)
+            existing_cols = list(df_existing.columns)
+            new_cols = list(df_new.columns)
 
-            if existing_cols != new_cols:
-                print(f"\n  Aviso: las columnas del CSV existente no coinciden con las nuevas.")
-                print(f"  Columnas existentes: {len(existing_cols)}")
-                print(f"  Columnas nuevas:     {len(new_cols)}")
-                print("  Opciones:")
-                print("    1  agregar de todos modos (puede generar columnas vacias)")
-                print("    2  crear archivo nuevo (backup del existente)")
-                print("    3  cancelar")
-                choice = input("  Eleccion (1-3): ").strip()
+            if set(existing_cols) != set(new_cols):
+                # Merge automatico: columnas del CSV existente primero (orden preservado),
+                # luego columnas nuevas que no estaban (en el orden de all_cols).
+                extra_new = [c for c in new_cols if c not in existing_cols]
+                extra_old = [c for c in existing_cols if c not in new_cols]
+                merged_cols = existing_cols + extra_new
+                for col in extra_new:
+                    df_existing[col] = ""
+                for col in extra_old:
+                    df_new[col] = ""
+                df_existing = df_existing[merged_cols]
+                df_new = df_new[merged_cols]
+                if extra_new:
+                    print(f"  Columnas nuevas agregadas al CSV: {extra_new}")
+                if extra_old:
+                    print(f"  Columnas ausentes en este ajuste (vacias): {extra_old}")
 
-                if choice == '1':
-                    merged_cols = sorted(existing_cols.union(new_cols))
-                    for col in merged_cols:
-                        if col not in df_existing.columns:
-                            df_existing[col] = ""
-                        if col not in df_new.columns:
-                            df_new[col] = ""
-                    df_existing = df_existing[merged_cols]
-                    df_new = df_new[merged_cols]
-                    pd.concat([df_existing, df_new], ignore_index=True).to_csv(csv_filename, index=False)
-                    print(f"  Agregado a {csv_filename} (columnas ajustadas).")
-
-                elif choice == '2':
-                    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-                    backup = f"{csv_filename}.backup_{timestamp}"
-                    shutil.copy2(csv_filename, backup)
-                    print(f"  Backup creado: {backup}")
-                    df_new.to_csv(csv_filename, index=False)
-                    print(f"  Nuevo archivo: {csv_filename}")
-
-                else:
-                    print("  Guardado cancelado.")
-                    return
-            else:
-                pd.concat([df_existing, df_new], ignore_index=True).to_csv(csv_filename, index=False)
-                print(f"  Fila agregada a {csv_filename}")
+            pd.concat([df_existing, df_new], ignore_index=True).to_csv(csv_filename, index=False)
+            print(f"  Fila agregada a {csv_filename}")
 
         except Exception as e:
             print(f"  Error leyendo CSV existente: {e}. Creando nuevo archivo.")
