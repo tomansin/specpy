@@ -1308,6 +1308,26 @@ def vrerr(lambda_err, lambda0):
     """
     return c_light / lambda0 * lambda_err
 
+def vr2lambda(vr, lambda0, vhelio=0.0):
+    """
+    Calculo inverso para obtener longitud de onda que se deberia observar teniendo la velocidad radial.
+
+    Parameters
+    ----------
+    vr : float
+        Velocidad radial (km/s).
+    lambda0 : float
+        Longitud de onda en reposo de la linea (A).
+    vhelio : float
+        Correccion de velocidad heliocentrica en km/s (default 0).
+
+    Returns
+    -------
+    float
+        Velocidad radial en km/s.
+    """
+    return lambda0 * (1 + vr / c_light) - vhelio  # vr en km/s
+    
 
 def calculate_smart_ylimits(data, central_fraction=0.8, margin_factor=0.1):
     """
