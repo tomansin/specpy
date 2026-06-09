@@ -11,22 +11,41 @@ Uso:
     multispec.py <archivo.fits>
 """
 
-import matplotlib.pyplot as plt
-import numpy as np
 import sys
 import os
 import argparse
-from matplotlib.gridspec import GridSpec
-from matplotlib.widgets import SpanSelector
-from scipy.interpolate import Akima1DInterpolator
-from astropy.io import fits
 
-from specpy.utils import (read_fits_multi, fit_cont_sigma, mask_generator,
-                          calculate_smart_ylimits, save_fit_to_csv,
-                          find_closest_line, vr, vrerr,
-                          gaussian, fit_lines)
-from spec import (interactive_gaussian_fitting, _print_vr_summary,
-                  VR_WARNING_THRESHOLD, HJD_KEYS, time_to_hjd)
+
+def _load_heavy_imports():
+    """Importa las dependencias pesadas (matplotlib, scipy, astropy, etc.).
+
+    Se difiere hasta despues de parsear los argumentos para que `-h`
+    responda al instante sin pagar el costo de cargar estas librerias.
+    """
+    global plt, np, GridSpec, SpanSelector, fits
+    global read_fits_multi, fit_cont_sigma, calculate_smart_ylimits, \
+        save_fit_to_csv, find_closest_line
+    global interactive_gaussian_fitting, _print_vr_summary, \
+        VR_WARNING_THRESHOLD, HJD_KEYS, time_to_hjd, _prompt_vhelio_correction
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.widgets import SpanSelector
+    from astropy.io import fits
+
+    from specpy.utils import (read_fits_multi, fit_cont_sigma,
+                              calculate_smart_ylimits, save_fit_to_csv,
+                              find_closest_line)
+
+    import spec
+    spec._load_heavy_imports()
+    interactive_gaussian_fitting = spec.interactive_gaussian_fitting
+    _print_vr_summary = spec._print_vr_summary
+    VR_WARNING_THRESHOLD = spec.VR_WARNING_THRESHOLD
+    HJD_KEYS = spec.HJD_KEYS
+    time_to_hjd = spec.time_to_hjd
+    _prompt_vhelio_correction = spec._prompt_vhelio_correction
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +131,8 @@ def interactive_normalization(wavelength, flux, filename,
         _init_excl  = []
 
     poly_order = [_init_order]
+    sigma_lower = [3.0]
+    sigma_upper = [5.0]
     excluded_regions = []   # [[wmin, wmax], ...] — intervalos excluidos del fit
     excluded_patches = []   # axvspan grises
     continuum_line = [None]
@@ -163,7 +184,7 @@ def interactive_normalization(wavelength, flux, filename,
             cont_model, reject, _ = fit_cont_sigma(
                 wavelength[mask], flux[mask],
                 model='chebyshev', order=poly_order[0],
-                use_sigma_clip=True, sigma_lower=3, sigma_upper=3)
+                use_sigma_clip=True, sigma_lower=sigma_lower[0], sigma_upper=sigma_upper[0])
             fit_model[0] = cont_model
             if reject is not None and len(reject[0]) > 0:
                 reject_scatter[0] = ax_spec.scatter(
@@ -260,6 +281,26 @@ def interactive_normalization(wavelength, flux, filename,
             print(f'  Orden polinomio: {poly_order[0]}')
             _refit_and_update()
 
+        elif event.key == 'up':
+            sigma_lower[0] = round(sigma_lower[0] + 0.5, 1)
+            print(f'  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}')
+            _refit_and_update()
+
+        elif event.key == 'down':
+            sigma_lower[0] = max(0.5, round(sigma_lower[0] - 0.5, 1))
+            print(f'  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}')
+            _refit_and_update()
+
+        elif event.key == 'right':
+            sigma_upper[0] = round(sigma_upper[0] + 0.5, 1)
+            print(f'  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}')
+            _refit_and_update()
+
+        elif event.key == 'left':
+            sigma_upper[0] = max(0.5, round(sigma_upper[0] - 0.5, 1))
+            print(f'  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}')
+            _refit_and_update()
+
         elif event.key in ('(', ')'):
             order_action[0] = 'prev_order' if event.key == '(' else 'next_order'
             if span_selector[0] is not None:
@@ -285,9 +326,12 @@ def interactive_normalization(wavelength, flux, filename,
     print("MODO NORMALIZACION MULTISPEC")
     print("="*60)
     print(f"  Orden polinomio inicial: {poly_order[0]}")
+    print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
     print("  a         activar/desactivar exclusion de regiones (arrastra en gris)")
     print("  e         eliminar ultima exclusion")
     print("  +/-       subir/bajar orden del polinomio Chebyshev")
+    print("  arr.arriba/abajo   subir/bajar sigma_lower (paso 0.5)")
+    print("  arr.der/izq        subir/bajar sigma_upper (paso 0.5)")
     print("  (/)       orden anterior/siguiente (guarda automaticamente)")
     print("  q         confirmar y cerrar")
     print("="*60)
@@ -347,7 +391,8 @@ def save_multispec(out_path, header, all_fluxes):
 # Visualizador principal
 # ---------------------------------------------------------------------------
 
-def plot_multispec(all_wavelengths, all_fluxes, filename, header):
+def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=None,
+                   start_mode=None):
     """
     Visualizador interactivo para espectros MULTISPEC.
 
@@ -359,12 +404,30 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
       w     ventana de zoom / Enter aplicar / z resetear
       d     ajuste de gaussianas
       h     imprimir header
+
+    Parameters
+    ----------
+    start_order : int or None
+        Numero de orden (1-indexado) con el que abrir el visualizador.
+    start_mode : str or None
+        Si es 'normalize' o 'fit_gaussians', entra directamente en ese modo
+        para el orden activo (sin mostrar primero el visualizador principal)
+        y sale al terminar sin reabrirlo.
     """
     norders = all_wavelengths.shape[0]
     norm_fluxes = {}          # {order_idx: norm_flux}
     order_norm_params = {}    # {order_idx: {'poly_order': int, 'excluded_regions': [...]}}
-    current_order = [0]
-    current = [all_wavelengths[0].copy(), all_fluxes[0].copy()]
+
+    idx0 = 0
+    if start_order is not None:
+        if 1 <= start_order <= norders:
+            idx0 = start_order - 1
+        else:
+            print(f"  WARNING: orden {start_order} fuera de rango "
+                  f"[1, {norders}]. Abriendo en el orden 1.")
+
+    current_order = [idx0]
+    current = [all_wavelengths[idx0].copy(), all_fluxes[idx0].copy()]
     is_normalized = [False]
     is_windowed = [False]
 
@@ -373,17 +436,10 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
         if key in header:
             hjd_value, _ = time_to_hjd(key, header[key])
             break
-    if 'VHELIO' in header:
-        vhelio_raw = float(header['VHELIO'])
-        resp = input(f"  VHELIO = {vhelio_raw:.4f} km/s encontrado en el header. "
-                     f"¿Aplicar corrección heliocentrica? [S/n]: ").strip().lower()
-        vhelio = vhelio_raw if resp not in ('n', 'no') else 0.0
-        if vhelio == 0.0:
-            print("  Corrección heliocentrica NO aplicada (eje espectral ya corregido).")
-        else:
-            print(f"  Corrección heliocentrica aplicada: vhelio = {vhelio:.4f} km/s")
-    else:
-        vhelio = 0.0
+    # La correccion heliocentrica solo se pregunta al momento de guardar el
+    # ajuste (ver _prompt_vhelio_correction); durante el ajuste interactivo
+    # las velocidades radiales se muestran sin corregir.
+    vhelio = 0.0
 
     def order_label():
         n = len(norm_fluxes)
@@ -565,7 +621,10 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
             return None
         return pending[0]
 
-    action = run_session()
+    if start_mode in ('normalize', 'fit_gaussians'):
+        action = start_mode
+    else:
+        action = run_session()
 
     while True:
         if action == 'normalize':
@@ -600,6 +659,9 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
                     break
             n = len(norm_fluxes)
             print(f"  {n}/{norders} ordenes normalizados.")
+            if start_mode is not None:
+                save_multispec_prompt(prompt=True)
+                break
 
         elif action == 'fit_gaussians':
             fit_result = interactive_gaussian_fitting(
@@ -609,8 +671,11 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
                 if high_vr:
                     print(f"\n  Aviso: velocidades radiales superan {VR_WARNING_THRESHOLD:.0f} km/s.")
                     if input("  Continuar? [s/N]: ").strip().lower() not in ('s', 'si', 'y', 'yes'):
-                        action = run_session()
-                        continue
+                        if start_mode is None:
+                            action = run_session()
+                            continue
+                        else:
+                            break
             if fit_result is not None and hjd_value is not None:
                 linename = 'line'
                 if 'g1_center' in fit_result.params:
@@ -624,8 +689,11 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
                 save = input(f"\n  Guardar ajuste en {default_csv}? [S/n/nombre]: ").strip()
                 if save.lower() not in ('n', 'no'):
                     csv_out = save if save and save.lower() not in ('s', 'si', 'y', 'yes') else default_csv
-                    save_fit_to_csv(filename, linename, hjd_value, vhelio,
+                    save_vhelio = _prompt_vhelio_correction(header)
+                    save_fit_to_csv(filename, linename, hjd_value, save_vhelio,
                                     fit_result, csv_filename=csv_out)
+            if start_mode is not None:
+                break
         else:
             break
 
@@ -639,13 +707,29 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header):
 def main():
     parser = argparse.ArgumentParser(description='Visualizador interactivo MULTISPEC')
     parser.add_argument('filename', help='Archivo FITS MULTISPEC')
+    parser.add_argument('-o', '--order', type=int, default=None,
+                        help='Numero de orden (1-indexado) con el que abrir el visualizador')
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--normalized', action='store_true',
+                            help='Entrar directamente en modo normalizacion (orden activo) y salir al terminar')
+    mode_group.add_argument('--gaussian', action='store_true',
+                            help='Entrar directamente en modo ajuste de gaussianas (orden activo) y salir al terminar')
     args = parser.parse_args()
+
+    _load_heavy_imports()
 
     header, all_wavelengths, all_fluxes = load_multispec(args.filename)
     if all_wavelengths is None:
         sys.exit(1)
 
-    plot_multispec(all_wavelengths, all_fluxes, args.filename, header)
+    start_mode = None
+    if args.normalized:
+        start_mode = 'normalize'
+    elif args.gaussian:
+        start_mode = 'fit_gaussians'
+
+    plot_multispec(all_wavelengths, all_fluxes, args.filename, header,
+                   start_order=args.order, start_mode=start_mode)
 
 
 if __name__ == "__main__":

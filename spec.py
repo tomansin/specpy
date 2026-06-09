@@ -10,20 +10,33 @@ Uso:
     spec.py <archivo.fits> [--window WMIN WMAX]
 """
 
-import matplotlib.pyplot as plt
-import numpy as np
 import sys
 import os
 import argparse
 import json
-from matplotlib.gridspec import GridSpec
-from matplotlib.widgets import SpanSelector
-from scipy.interpolate import Akima1DInterpolator
-from specpy.utils import (read_fits_simple, fit_cont_sigma,
-                          mask_generator, gaussian, fit_lines,
-                          find_closest_line, vr, vrerr,
-                          calculate_smart_ylimits, save_spectrum_fits,
-                          save_fit_to_csv)
+
+
+def _load_heavy_imports():
+    """Importa las dependencias pesadas (matplotlib, scipy, etc.).
+
+    Se difiere hasta despues de parsear los argumentos para que `-h`
+    responda al instante sin pagar el costo de cargar estas librerias.
+    """
+    global plt, np, GridSpec, SpanSelector, Akima1DInterpolator
+    global read_fits_simple, fit_cont_sigma, mask_generator, gaussian, \
+        fit_lines, find_closest_line, vr, vrerr, calculate_smart_ylimits, \
+        save_spectrum_fits, save_fit_to_csv
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.widgets import SpanSelector
+    from scipy.interpolate import Akima1DInterpolator
+    from specpy.utils import (read_fits_simple, fit_cont_sigma,
+                              mask_generator, gaussian, fit_lines,
+                              find_closest_line, vr, vrerr,
+                              calculate_smart_ylimits, save_spectrum_fits,
+                              save_fit_to_csv)
 
 # Claves de cabecera FITS aceptadas como tiempo heliocentrizo/baricentrico.
 # Se prueban en orden; se usa la primera que se encuentre.
@@ -136,7 +149,7 @@ def interactive_normalization(wavelength, flux, filename):
     ranges = []
     current_poly_order = [5]   # orden heredado por nuevos rangos
     sigma_lower = [3.0]
-    sigma_upper = [3.0]
+    sigma_upper = [5.0]
     span_selector = [None]
     selection_active = [False]
     continuum_line = [None]    # linea roja del continuo final en ax_spec
@@ -1419,6 +1432,27 @@ def _print_vr_summary(result, vhelio):
     return high_vr
 
 
+def _prompt_vhelio_correction(header):
+    """Pregunta si aplicar la correccion heliocentrica del header al guardar.
+
+    Returns
+    -------
+    float
+        VHELIO (km/s) a aplicar, o 0.0 si no hay VHELIO en el header o el
+        usuario decide no aplicar la correccion.
+    """
+    if 'VHELIO' not in header:
+        return 0.0
+    vhelio_raw = float(header['VHELIO'])
+    resp = input(f"  VHELIO = {vhelio_raw:.4f} km/s encontrado en el header. "
+                 f"¿Aplicar corrección heliocentrica al guardar? [S/n]: ").strip().lower()
+    if resp in ('n', 'no'):
+        print("  Corrección heliocentrica NO aplicada (eje espectral ya corregido).")
+        return 0.0
+    print(f"  Corrección heliocentrica aplicada: vhelio = {vhelio_raw:.4f} km/s")
+    return vhelio_raw
+
+
 
 def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windowed=False,
                   start_mode=None):
@@ -1467,17 +1501,10 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
         if key in header:
             hjd_value, _ = time_to_hjd(key, header[key])
             break
-    if 'VHELIO' in header:
-        vhelio_raw = float(header['VHELIO'])
-        resp = input(f"  VHELIO = {vhelio_raw:.4f} km/s encontrado en el header. "
-                     f"¿Aplicar corrección heliocentrica? [S/n]: ").strip().lower()
-        vhelio = vhelio_raw if resp not in ('n', 'no') else 0.0
-        if vhelio == 0.0:
-            print("  Corrección heliocentrica NO aplicada (eje espectral ya corregido).")
-        else:
-            print(f"  Corrección heliocentrica aplicada: vhelio = {vhelio:.4f} km/s")
-    else:
-        vhelio = 0.0
+    # La correccion heliocentrica solo se pregunta al momento de guardar el
+    # ajuste (ver _prompt_vhelio_correction); durante el ajuste interactivo
+    # las velocidades radiales se muestran sin corregir.
+    vhelio = 0.0
 
     # Estado persistente entre sesiones.
     # Se usan listas de un elemento para permitir mutacion desde closures anidados.
@@ -1809,7 +1836,8 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
                         csv_out = save
                     else:
                         csv_out = default_csv
-                    save_fit_to_csv(filename, linename, hjd_value, vhelio, fit_result,
+                    save_vhelio = _prompt_vhelio_correction(header)
+                    save_fit_to_csv(filename, linename, hjd_value, save_vhelio, fit_result,
                                     csv_filename=csv_out)
             elif fit_result is not None and hjd_value is None:
                 print("  Aviso: no se puede guardar sin HJD en el header.")
@@ -1835,6 +1863,8 @@ def main():
                             help='Entrar directamente en modo ajuste de gaussianas y salir al terminar')
 
     args = parser.parse_args()
+
+    _load_heavy_imports()
 
     is_windowed = False
 
