@@ -334,6 +334,11 @@ def interactive_normalization(wavelength, flux, filename,
     print("  arr.der/izq        subir/bajar sigma_upper (paso 0.5)")
     print("  (/)       orden anterior/siguiente (guarda automaticamente)")
     print("  q         confirmar y cerrar")
+    print("  --- matplotlib ---")
+    print("  p         modo pan (arrastrar para mover)")
+    print("  o         modo zoom (arrastrar para seleccionar)")
+    print("  scroll    zoom in/out")
+    print("  home      reset vista")
     print("="*60)
 
     # Pre-poblar exclusiones del orden si las había
@@ -352,7 +357,6 @@ def interactive_normalization(wavelength, flux, filename,
 
     # ── Post-show ─────────────────────────────────────────────────────────────
     def _compute_norm():
-        _refit()
         if fit_model[0] is None:
             return None
         return flux / fit_model[0](wavelength)
@@ -558,10 +562,9 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
         def switch_order(new_idx):
             current_order[0] = new_idx
             is_windowed[0] = False
-            idx = new_idx
-            wl_new = all_wavelengths[idx]
-            fl_new = norm_fluxes[idx] if idx in norm_fluxes else all_fluxes[idx]
-            is_normalized[0] = (idx in norm_fluxes)
+            wl_new = all_wavelengths[new_idx]
+            fl_new = norm_fluxes[new_idx] if new_idx in norm_fluxes else all_fluxes[new_idx]
+            is_normalized[0] = (new_idx in norm_fluxes)
             current[0] = wl_new; current[1] = fl_new
             ax.lines[0].set_data(wl_new, fl_new)
             ax.set_title(make_title(), fontsize=14, fontweight='bold')
@@ -612,6 +615,11 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
         print("  z         resetear vista")
         print("  d         ajuste de gaussianas")
         print("  q         cerrar")
+        print("  --- matplotlib ---")
+        print("  p         modo pan (arrastrar para mover)")
+        print("  o         modo zoom (arrastrar para seleccionar)")
+        print("  scroll    zoom in/out")
+        print("  home      reset vista")
         print("="*50)
 
         plt.show()

@@ -362,7 +362,7 @@ def interactive_normalization(wavelength, flux, filename):
         else:
             r['used_points_handle'] = None
 
-    def activate_range(r, _ridx=None):
+    def activate_range(r):
         """Convierte un rango sellado en activo: quita '+', recrea patches rojos."""
         if r.get('used_points_handle') is not None:
             try:
@@ -463,7 +463,7 @@ def interactive_normalization(wavelength, flux, filename):
                 ranges.pop()
                 print(f"  Rango {ridx + 1} (vacio) eliminado.")
                 if ranges:
-                    activate_range(ranges[-1], len(ranges) - 1)
+                    activate_range(ranges[-1])
                 update_display(preserve_view=True)
                 return
 
@@ -486,7 +486,7 @@ def interactive_normalization(wavelength, flux, filename):
                 print(f"  Rango {ridx + 1} eliminado. "
                       f"Quedan {len(ranges)} rango(s).")
                 if ranges:
-                    activate_range(ranges[-1], len(ranges) - 1)
+                    activate_range(ranges[-1])
             update_display(preserve_view=True)
 
         elif event.key in ('+', '='):
@@ -564,6 +564,11 @@ def interactive_normalization(wavelength, flux, filename):
     print("  arr.arriba/abajo   subir/bajar sigma_lower (paso 0.5)")
     print("  arr.der/izq        subir/bajar sigma_upper (paso 0.5)")
     print("  q         confirmar y cerrar")
+    print("  --- matplotlib ---")
+    print("  p         modo pan (arrastrar para mover)")
+    print("  o         modo zoom (arrastrar para seleccionar)")
+    print("  scroll    zoom in/out")
+    print("  home      reset vista")
     print("="*60)
 
     plt.tight_layout()
@@ -649,7 +654,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
     gaussians = []
     # Pasos de la gaussiana en construccion: [center, depth] o [center, depth, left_wl]
     current_gaussian = None
-    step = None          # 'center', 'fwhm_left', 'fwhm_right'
+    step = None          # 'center' | 'fwhm'
     result = None        # lmfit.ModelResult del ultimo ajuste exitoso
 
     # Handles graficos para limpiar sin cla()
@@ -697,7 +702,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
     def update_status():
         """Actualiza el texto de estado superpuesto en la figura."""
         if erase_mode:
-            msg = "MODO BORRADO - Click en un punto para eliminarlo (r: restaurar todos)"
+            msg = "MODO BORRADO - Click en un punto para eliminarlo (b: restaurar todos)"
         elif step is None:
             msg = "Listo. d: nueva gaussiana"
             if gaussians:
@@ -1225,7 +1230,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             plt.close(fig)
             return
 
-        # Dentro del modo de borrado solo se aceptan 'e'/'escape' para salir y 'r' para restaurar
+        # Dentro del modo de borrado solo se aceptan 'e'/'escape' para salir y 'b' para restaurar
         if erase_mode:
             if event.key in ('e', 'escape'):
                 erase_mode = False
