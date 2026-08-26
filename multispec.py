@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """
 multispec.py - Visualizador interactivo de espectros FITS en formato MULTISPEC.
 
@@ -11,10 +10,10 @@ Uso:
     multispec.py <archivo.fits>
 """
 
-import sys
-import os
 import argparse
 import json
+import os
+import sys
 
 
 def _load_heavy_imports():
@@ -23,7 +22,7 @@ def _load_heavy_imports():
     Se difiere hasta despues de parsear los argumentos para que `-h`
     responda al instante sin pagar el costo de cargar estas librerias.
     """
-    global plt, np, GridSpec, SpanSelector, fits
+    global plt, np, GridSpec, SpanSelector, Line2D, PathCollection, fits
     global read_fits_multi, fit_cont_sigma, calculate_smart_ylimits, \
         save_fit_to_csv, find_closest_line
     global interactive_gaussian_fitting, _print_vr_summary, \
@@ -31,15 +30,20 @@ def _load_heavy_imports():
 
     import matplotlib.pyplot as plt
     import numpy as np
-    from matplotlib.gridspec import GridSpec
-    from matplotlib.widgets import SpanSelector
     from astropy.io import fits
-
-    from specpy.utils import (read_fits_multi, fit_cont_sigma,
-                              calculate_smart_ylimits, save_fit_to_csv,
-                              find_closest_line)
+    from matplotlib.collections import PathCollection
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.lines import Line2D
+    from matplotlib.widgets import SpanSelector
 
     import spec
+    from specpy.utils import (
+        calculate_smart_ylimits,
+        find_closest_line,
+        fit_cont_sigma,
+        read_fits_multi,
+        save_fit_to_csv,
+    )
     spec._load_heavy_imports()
     interactive_gaussian_fitting = spec.interactive_gaussian_fitting
     _print_vr_summary = spec._print_vr_summary
@@ -86,7 +90,7 @@ def load_multispec(filename):
     except FileNotFoundError:
         print(f"Error: archivo '{filename}' no encontrado")
         return None, None, None
-    except Exception as e:
+    except (OSError, ValueError, KeyError) as e:
         print(f"Error cargando multispec: {e}")
         return None, None, None
 
@@ -136,12 +140,12 @@ def interactive_normalization(wavelength, flux, filename,
     sigma_upper = [5.0]
     excluded_regions = []   # [[wmin, wmax], ...] — intervalos excluidos del fit
     excluded_patches = []   # axvspan grises
-    continuum_line = [None]
+    continuum_line: list[Line2D | None] = [None]
     fit_model = [None]
-    reject_scatter = [None]
-    span_selector = [None]
+    reject_scatter: list[PathCollection | None] = [None]
+    span_selector: list[SpanSelector | None] = [None]
     selection_active = [False]
-    order_action = [None]
+    order_action: list[str | None] = [None]
 
     title_base = f'Normalizacion: {os.path.basename(filename)}'
     if order_label:
@@ -171,7 +175,7 @@ def interactive_normalization(wavelength, flux, filename,
         if reject_scatter[0] is not None:
             try:
                 reject_scatter[0].remove()
-            except Exception:
+            except ValueError:
                 pass
             reject_scatter[0] = None
 
@@ -191,13 +195,12 @@ def interactive_normalization(wavelength, flux, filename,
                 reject_scatter[0] = ax_spec.scatter(
                     reject[0], reject[1],
                     c='green', s=14, alpha=0.6, marker='x', zorder=5)
-        except Exception as e:
+        except ValueError as e:
             print(f'  Error ajuste: {e}')
             fit_model[0] = None
 
     def _update(preserve_view=False):
-        if preserve_view:
-            sx, sy = ax_spec.get_xlim(), ax_spec.get_ylim()
+        sx, sy = ax_spec.get_xlim(), ax_spec.get_ylim()
         if continuum_line[0] is not None:
             continuum_line[0].remove(); continuum_line[0] = None
         if fit_model[0] is not None:
@@ -247,7 +250,7 @@ def interactive_normalization(wavelength, flux, filename,
                 span_selector[0].disconnect_events()
             span_selector[0] = SpanSelector(
                 ax_spec, _onselect_excl, 'horizontal', useblit=True,
-                props=dict(alpha=0.25, facecolor='gray'),
+                props={"alpha": 0.25, "facecolor": "gray"},
                 interactive=True, drag_from_anywhere=True)
             print('  Seleccion de EXCLUSION activada (arrastra sobre lineas a ignorar)')
         else:
@@ -266,7 +269,7 @@ def interactive_normalization(wavelength, flux, filename,
                 excluded_regions.pop()
                 patch = excluded_patches.pop()
                 try: patch.remove()
-                except Exception: pass
+                except ValueError: pass
                 print(f'  Ultima exclusion eliminada. Quedan {len(excluded_regions)}.')
                 _refit_and_update()
             else:
@@ -507,7 +510,7 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
         save_multispec(out_path, header, flux_out)
 
     def run_session():
-        pending = [None]
+        pending: list[str | None] = [None]
         fig, ax = plt.subplots(figsize=(12, 6))
 
         wl = current[0]; fl = current[1]
@@ -527,7 +530,7 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
                 fig.canvas.toolbar.update()
 
         window_limits = [None, None]
-        span_selector = [None]
+        span_selector: list[SpanSelector | None] = [None]
 
         def onselect_window(xmin, xmax):
             if xmin > xmax: xmin, xmax = xmax, xmin
@@ -539,7 +542,7 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
             window_limits[0] = window_limits[1] = None
             span_selector[0] = SpanSelector(
                 ax, onselect_window, 'horizontal', useblit=True,
-                props=dict(alpha=0.3, facecolor='blue'),
+                props={"alpha": 0.3, "facecolor": "blue"},
                 interactive=True, drag_from_anywhere=True)
             print("  Modo ventana: click y arrastra, luego Enter para aplicar")
 
@@ -679,7 +682,7 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
                     fl_orig = all_fluxes[idx]
                     is_normalized[0] = (idx in norm_fluxes)
                     current[0] = wl_orig
-                    current[1] = norm_fluxes[idx] if idx in norm_fluxes else fl_orig
+                    current[1] = norm_fluxes.get(idx, fl_orig)
                     is_windowed[0] = False
                     ol = order_label()
                 else:
@@ -710,7 +713,7 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
                         li = find_closest_line(fit_result.params['g1_center'].value)
                         linename = li.get('name', linename)
                         if len(linename) > 4: linename = linename[-4:]
-                    except Exception:
+                    except (ValueError, KeyError):
                         pass
                 default_csv = f"fitted_{linename}.csv"
                 save = input(f"\n  Guardar ajuste en {default_csv}? [S/n/nombre]: ").strip()
@@ -767,7 +770,7 @@ def main():
                 params_dict = json.load(f)
             n = sum(1 for k in params_dict if k.startswith('g') and '_center' in k)
             print(f"  Parametros cargados desde {args.params} ({n} gaussiana(s)).")
-        except Exception as e:
+        except (OSError, ValueError, TypeError) as e:
             print(f"  Error al cargar {args.params}: {e}")
             sys.exit(1)
 

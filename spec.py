@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """
 spec.py - Visualizador interactivo de espectros estelares en formato FITS.
 
@@ -10,10 +9,10 @@ Uso:
     spec.py <archivo.fits> [--window WMIN WMAX]
 """
 
-import sys
-import os
 import argparse
 import json
+import os
+import sys
 
 
 def _load_heavy_imports():
@@ -22,26 +21,46 @@ def _load_heavy_imports():
     Se difiere hasta despues de parsear los argumentos para que `-h`
     responda al instante sin pagar el costo de cargar estas librerias.
     """
-    global plt, np, GridSpec, SpanSelector, Akima1DInterpolator
-    global read_fits_simple, fit_cont_sigma, mask_generator, gaussian, \
-        fit_lines, find_closest_line, vr, vrerr, calculate_smart_ylimits, \
-        save_spectrum_fits, save_fit_to_csv
+    global plt, np, GridSpec, SpanSelector, Line2D, Akima1DInterpolator
+    global \
+        read_fits_simple, \
+        fit_cont_sigma, \
+        mask_generator, \
+        gaussian, \
+        fit_lines, \
+        find_closest_line, \
+        vr, \
+        vrerr, \
+        calculate_smart_ylimits, \
+        save_spectrum_fits, \
+        save_fit_to_csv
 
     import matplotlib.pyplot as plt
     import numpy as np
     from matplotlib.gridspec import GridSpec
+    from matplotlib.lines import Line2D
     from matplotlib.widgets import SpanSelector
     from scipy.interpolate import Akima1DInterpolator
-    from specpy.utils import (read_fits_simple, fit_cont_sigma,
-                              mask_generator, gaussian, fit_lines,
-                              find_closest_line, vr, vrerr,
-                              calculate_smart_ylimits, save_spectrum_fits,
-                              save_fit_to_csv)
+
+    from specpy.utils import (
+        calculate_smart_ylimits,
+        find_closest_line,
+        fit_cont_sigma,
+        fit_lines,
+        gaussian,
+        mask_generator,
+        read_fits_simple,
+        save_fit_to_csv,
+        save_spectrum_fits,
+        vr,
+        vrerr,
+    )
+
 
 # Claves de cabecera FITS aceptadas como tiempo heliocentrizo/baricentrico.
 # Se prueban en orden; se usa la primera que se encuentre.
-HJD_KEYS = ['HJD', 'JD', 'MJD', 'MJD-OBS', 'OHP DRS BJD', 'I-HJD', 'MJDATE']
-_MJD_KEYS = {'MJD', 'MJD-OBS', 'MJDATE'}
+HJD_KEYS = ["HJD", "JD", "MJD", "MJD-OBS", "OHP DRS BJD", "I-HJD", "MJDATE"]
+_MJD_KEYS = {"MJD", "MJD-OBS", "MJDATE"}
 
 
 def time_to_hjd(key, value):
@@ -102,10 +121,9 @@ def load_spectrum(filename):
     except FileNotFoundError:
         print(f"Error: File '{filename}' not found")
         return None, None, None
-    except Exception as e:
+    except (OSError, ValueError, KeyError) as e:
         print(f"Error loading spectrum: {e}")
         return None, None, None
-
 
 
 def interactive_normalization(wavelength, flux, filename):
@@ -138,7 +156,7 @@ def interactive_normalization(wavelength, flux, filename):
     -------
     norm_flux : np.ndarray o None
     """
-    
+
     fig = plt.figure(figsize=(12, 8))
     gs = GridSpec(5, 1)
     ax_spec = fig.add_subplot(gs[:3, 0])
@@ -147,88 +165,105 @@ def interactive_normalization(wavelength, flux, filename):
     # Cada rango: dict con 'regions', 'poly_order', 'fit_model', 'reject',
     #             'poly_line', 'reject_scatter', 'region_patches'
     ranges = []
-    current_poly_order = [5]   # orden heredado por nuevos rangos
+    current_poly_order = [5]  # orden heredado por nuevos rangos
     sigma_lower = [3.0]
     sigma_upper = [5.0]
-    span_selector = [None]
+    span_selector: list[SpanSelector | None] = [None]
     selection_active = [False]
-    continuum_line = [None]    # linea roja del continuo final en ax_spec
-
+    continuum_line: list[Line2D | None] = [None]  # linea roja del continuo final en ax_spec
 
     # ── Setup ─────────────────────────────────────────────────────────────────
-    ax_spec.plot(wavelength, flux, 'k-', linewidth=1.5, label='Espectro')
-    ax_spec.set_xlabel('Wavelength (A)', fontsize=12)
-    ax_spec.set_ylabel('Flux', fontsize=12)
-    ax_spec.set_title(f'Normalizacion: {os.path.basename(filename)}',
-                      fontsize=14, fontweight='bold')
+    ax_spec.plot(wavelength, flux, "k-", linewidth=1.5, label="Espectro")
+    ax_spec.set_xlabel("Wavelength (A)", fontsize=12)
+    ax_spec.set_ylabel("Flux", fontsize=12)
+    ax_spec.set_title(
+        f"Normalizacion: {os.path.basename(filename)}", fontsize=14, fontweight="bold"
+    )
     ax_spec.set_ylim(*calculate_smart_ylimits(flux))
     ax_spec.set_xlim()
-    ax_spec.grid(True, alpha=0.3, linestyle='--')
-    ax_spec.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
+    ax_spec.grid(True, alpha=0.3, linestyle="--")
+    ax_spec.axhline(y=0, color="gray", linestyle=":", alpha=0.5)
     ax_spec.legend()
 
-    ax_norm.set_xlabel('Wavelength (A)', fontsize=12)
-    ax_norm.set_ylabel('Flujo normalizado', fontsize=12)
-    ax_norm.set_title('Previsualizacion normalizada', fontsize=14, fontweight='bold')
-    ax_norm.grid(True, alpha=0.3, linestyle='--')
-    ax_norm.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Referencia (1.0)')
-    ax_norm.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
+    ax_norm.set_xlabel("Wavelength (A)", fontsize=12)
+    ax_norm.set_ylabel("Flujo normalizado", fontsize=12)
+    ax_norm.set_title("Previsualizacion normalizada", fontsize=14, fontweight="bold")
+    ax_norm.grid(True, alpha=0.3, linestyle="--")
+    ax_norm.axhline(
+        y=1, color="red", linestyle="--", alpha=0.5, label="Referencia (1.0)"
+    )
+    ax_norm.axhline(y=0, color="gray", linestyle=":", alpha=0.5)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def range_span(r):
         """Devuelve (wmin, wmax) = envelope de todas las regiones del rango."""
-        return (min(reg[0] for reg in r['regions']),
-                max(reg[1] for reg in r['regions']))
+        return (
+            min(reg[0] for reg in r["regions"]),
+            max(reg[1] for reg in r["regions"]),
+        )
 
     def refit_range(r, ridx):
         """Reajusta el polinomio del rango r y redibuja sus artists."""
-        if r['poly_line'] is not None:
-            r['poly_line'].remove()
-            r['poly_line'] = None
-        if r['reject_scatter'] is not None:
-            r['reject_scatter'].remove()
-            r['reject_scatter'] = None
+        if r["poly_line"] is not None:
+            r["poly_line"].remove()
+            r["poly_line"] = None
+        if r["reject_scatter"] is not None:
+            r["reject_scatter"].remove()
+            r["reject_scatter"] = None
 
-        if not r['regions']:
-            r['fit_model'] = None
+        if not r["regions"]:
+            r["fit_model"] = None
             return
 
-        mask = mask_generator(wavelength, r['regions'])
+        mask = mask_generator(wavelength, r["regions"])
         n_pts = int(np.sum(mask))
-        if n_pts <= r['poly_order'] + 1:
-            print(f"  Aviso: {n_pts} puntos insuficientes para orden "
-                  f"{r['poly_order']} en R{ridx + 1}")
-            r['fit_model'] = None
+        if n_pts <= r["poly_order"] + 1:
+            print(
+                f"  Aviso: {n_pts} puntos insuficientes para orden "
+                f"{r['poly_order']} en R{ridx + 1}"
+            )
+            r["fit_model"] = None
             return
 
         try:
             cont_model, reject, _ = fit_cont_sigma(
-                wavelength[mask], flux[mask],
-                model='chebyshev', order=r['poly_order'],
-                use_sigma_clip=True, sigma_lower=sigma_lower[0], sigma_upper=sigma_upper[0]
+                wavelength[mask],
+                flux[mask],
+                model="chebyshev",
+                order=r["poly_order"],
+                use_sigma_clip=True,
+                sigma_lower=sigma_lower[0],
+                sigma_upper=sigma_upper[0],
             )
-            r['fit_model'] = cont_model
-            r['reject'] = reject
-        except Exception as e:
+            r["fit_model"] = cont_model
+            r["reject"] = reject
+        except ValueError as e:
             print(f"  Error ajuste R{ridx + 1}: {e}")
-            r['fit_model'] = None
+            r["fit_model"] = None
             return
 
         # color = COLORS[ridx % len(COLORS)]
         wmin, wmax = range_span(r)
         x_plot = np.linspace(wmin, wmax, 500)
-        is_active = (ridx == len(ranges) - 1)
-        label = f'R{ridx + 1} ord{r["poly_order"]} (pol activo)' if is_active else '_nolegend_'
-        r['poly_line'], = ax_spec.plot(
-            x_plot, cont_model(x_plot),
-            color='red', linewidth=2, linestyle='--', alpha=0.85,
-            label=label
+        is_active = ridx == len(ranges) - 1
+        label = (
+            f"R{ridx + 1} ord{r['poly_order']} (pol activo)"
+            if is_active
+            else "_nolegend_"
+        )
+        (r["poly_line"],) = ax_spec.plot(
+            x_plot,
+            cont_model(x_plot),
+            color="red",
+            linewidth=2,
+            linestyle="--",
+            alpha=0.85,
+            label=label,
         )
         if reject is not None and len(reject[0]) > 0:
-            r['reject_scatter'] = ax_spec.scatter(
-                reject[0], reject[1],
-                c='green', s=12, alpha=0.5, marker='x', zorder=5
+            r["reject_scatter"] = ax_spec.scatter(
+                reject[0], reject[1], c="green", s=12, alpha=0.5, marker="x", zorder=5
             )
 
     def build_continuum():
@@ -237,21 +272,20 @@ def interactive_normalization(wavelength, flux, filename):
         1 rango valido  -> polinomio evaluado en todo el espectro (modo clasico).
         >1 rangos validos -> Akima dentro del span combinado; 1.0 fuera.
         """
-        valid = [r for r in ranges if r.get('fit_model') is not None]
+        valid = [r for r in ranges if r.get("fit_model") is not None]
         if not valid:
             return None
 
         if len(valid) == 1:
-            return valid[0]['fit_model'](wavelength)
+            return valid[0]["fit_model"](wavelength)
 
         all_x, all_y = [], []
         for r in valid:
             wmin, wmax = range_span(r)
-            n_pts = max(80, int((wmax - wmin)
-                                / (wavelength[-1] - wavelength[0]) * 800))
+            n_pts = max(80, int((wmax - wmin) / (wavelength[-1] - wavelength[0]) * 800))
             x_r = np.linspace(wmin, wmax, n_pts)
             all_x.append(x_r)
-            all_y.append(r['fit_model'](x_r))
+            all_y.append(r["fit_model"](x_r))
 
         all_x = np.concatenate(all_x)
         all_y = np.concatenate(all_y)
@@ -269,7 +303,7 @@ def interactive_normalization(wavelength, flux, filename):
             in_span = (wavelength >= all_x[0]) & (wavelength <= all_x[-1])
             continuum[in_span] = interp(wavelength[in_span])
             return continuum
-        except Exception as e:
+        except ValueError as e:
             print(f"  Error Akima: {e}")
             return None
 
@@ -279,9 +313,8 @@ def interactive_normalization(wavelength, flux, filename):
         preserve_view : si True, conserva xlim y ylim de ax_spec (para +/-).
                         El ylim de ax_norm siempre se recalcula desde los datos.
         """
-        if preserve_view:
-            saved_xlim      = ax_spec.get_xlim()
-            saved_ylim_spec = ax_spec.get_ylim()
+        saved_xlim = ax_spec.get_xlim()
+        saved_ylim_spec = ax_spec.get_ylim()
 
         if continuum_line[0] is not None:
             continuum_line[0].remove()
@@ -290,39 +323,46 @@ def interactive_normalization(wavelength, flux, filename):
         continuum = build_continuum()
 
         if continuum is not None:
-            valid = [r for r in ranges if r.get('fit_model') is not None]
+            valid = [r for r in ranges if r.get("fit_model") is not None]
             wmin_all = min(range_span(r)[0] for r in valid)
             wmax_all = max(range_span(r)[1] for r in valid)
             draw_mask = (wavelength >= wmin_all) & (wavelength <= wmax_all)
-            continuum_line[0], = ax_spec.plot(
-                wavelength[draw_mask], continuum[draw_mask],
-                'r-', linewidth=2, alpha=0.9,
+            (continuum_line[0],) = ax_spec.plot(
+                wavelength[draw_mask],
+                continuum[draw_mask],
+                "r-",
+                linewidth=2,
+                alpha=0.9,
             )
-        ax_spec.legend(loc='best')
+        ax_spec.legend(loc="best")
 
         ax_norm.clear()
-        ax_norm.set_xlabel('Wavelength (A)', fontsize=12)
-        ax_norm.set_ylabel('Flujo normalizado', fontsize=12)
-        ax_norm.set_title('Previsualizacion normalizada', fontsize=14, fontweight='bold')
-        ax_norm.grid(True, alpha=0.3, linestyle='--')
-        ax_norm.axhline(y=1, color='red', linestyle='--', alpha=0.5,
-                        label='Referencia (1.0)')
-        ax_norm.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
+        ax_norm.set_xlabel("Wavelength (A)", fontsize=12)
+        ax_norm.set_ylabel("Flujo normalizado", fontsize=12)
+        ax_norm.set_title(
+            "Previsualizacion normalizada", fontsize=14, fontweight="bold"
+        )
+        ax_norm.grid(True, alpha=0.3, linestyle="--")
+        ax_norm.axhline(
+            y=1, color="red", linestyle="--", alpha=0.5, label="Referencia (1.0)"
+        )
+        ax_norm.axhline(y=0, color="gray", linestyle=":", alpha=0.5)
 
         new_ylim_norm = None
         if continuum is not None:
             norm_flux = flux / continuum
-            ax_norm.plot(wavelength, norm_flux, 'k-', linewidth=1.5,
-                         label='Normalizado')
+            ax_norm.plot(
+                wavelength, norm_flux, "k-", linewidth=1.5, label="Normalizado"
+            )
             region_mask = np.zeros(len(wavelength), dtype=bool)
             for r in ranges:
-                if r['regions']:
-                    region_mask |= mask_generator(wavelength, r['regions'])
+                if r["regions"]:
+                    region_mask |= mask_generator(wavelength, r["regions"])
             if np.any(region_mask):
                 s = np.std(norm_flux[region_mask])
                 s = s if s > 0 else 0.05
                 new_ylim_norm = (1 - 15 * s, 1 + 5 * s)
-        ax_norm.legend(loc='best')
+        ax_norm.legend(loc="best")
 
         if new_ylim_norm is not None:
             ax_norm.set_ylim(*new_ylim_norm)
@@ -337,44 +377,50 @@ def interactive_normalization(wavelength, flux, filename):
 
     def seal_range(r):
         """Convierte el rango activo en inactivo: quita patches, pone '+' azules."""
-        if r.get('poly_line') is not None:
-            r['poly_line'].set_label('_nolegend_')
+        if r.get("poly_line") is not None:
+            r["poly_line"].set_label("_nolegend_")
 
-        for patch in r['region_patches']:
+        for patch in r["region_patches"]:
             try:
                 patch.remove()
-            except Exception:
+            except ValueError:
                 pass
-        r['region_patches'].clear()
+        r["region_patches"].clear()
 
-        if r.get('used_points_handle') is not None:
+        if r.get("used_points_handle") is not None:
             try:
-                r['used_points_handle'].remove()
-            except Exception:
+                r["used_points_handle"].remove()
+            except ValueError:
                 pass
 
-        if r['regions']:
-            mask = mask_generator(wavelength, r['regions'])
-            r['used_points_handle'], = ax_spec.plot(
-                wavelength[mask], flux[mask],
-                'b+', markersize=5, alpha=0.6, zorder=3, label='_nolegend_'
+        if r["regions"]:
+            mask = mask_generator(wavelength, r["regions"])
+            (r["used_points_handle"],) = ax_spec.plot(
+                wavelength[mask],
+                flux[mask],
+                "b+",
+                markersize=5,
+                alpha=0.6,
+                zorder=3,
+                label="_nolegend_",
             )
         else:
-            r['used_points_handle'] = None
+            r["used_points_handle"] = None
 
     def activate_range(r):
         """Convierte un rango sellado en activo: quita '+', recrea patches rojos."""
-        if r.get('used_points_handle') is not None:
+        if r.get("used_points_handle") is not None:
             try:
-                r['used_points_handle'].remove()
-            except Exception:
+                r["used_points_handle"].remove()
+            except ValueError:
                 pass
-            r['used_points_handle'] = None
+            r["used_points_handle"] = None
 
-        for region in r['regions']:
-            patch = ax_spec.axvspan(region[0], region[1],
-                                    alpha=0.15, color='red', zorder=0)
-            r['region_patches'].append(patch)
+        for region in r["regions"]:
+            patch = ax_spec.axvspan(
+                region[0], region[1], alpha=0.15, color="red", zorder=0
+            )
+            r["region_patches"].append(patch)
 
     # ── SpanSelector ──────────────────────────────────────────────────────────
 
@@ -384,24 +430,29 @@ def interactive_normalization(wavelength, flux, filename):
 
         # Crear primer rango automaticamente si no hay ninguno
         if not ranges:
-            ranges.append({
-                'regions': [], 'poly_order': current_poly_order[0],
-                'fit_model': None, 'reject': None,
-                'poly_line': None, 'reject_scatter': None,
-                'region_patches': [], 'used_points_handle': None,
-            })
-            print(f"  Rango 1 iniciado")
+            ranges.append(
+                {
+                    "regions": [],
+                    "poly_order": current_poly_order[0],
+                    "fit_model": None,
+                    "reject": None,
+                    "poly_line": None,
+                    "reject_scatter": None,
+                    "region_patches": [],
+                    "used_points_handle": None,
+                }
+            )
+            print("  Rango 1 iniciado")
 
         r = ranges[-1]
         ridx = len(ranges) - 1
-        r['regions'].append([xmin, xmax])
+        r["regions"].append([xmin, xmax])
 
         # Patch rojo para el rango activo
-        patch = ax_spec.axvspan(xmin, xmax, alpha=0.15, color='red', zorder=0)
-        r['region_patches'].append(patch)
+        patch = ax_spec.axvspan(xmin, xmax, alpha=0.15, color="red", zorder=0)
+        r["region_patches"].append(patch)
 
-        print(f"  R{ridx + 1}, region {len(r['regions'])}: "
-              f"[{xmin:.2f}, {xmax:.2f}] A")
+        print(f"  R{ridx + 1}, region {len(r['regions'])}: [{xmin:.2f}, {xmax:.2f}] A")
         refit_range(r, ridx)
         update_display(preserve_view=True)
 
@@ -414,11 +465,13 @@ def interactive_normalization(wavelength, flux, filename):
                 span_selector[0] = None
                 fig.canvas.draw_idle()
             span_selector[0] = SpanSelector(
-                ax_spec, onselect, 'horizontal',
+                ax_spec,
+                onselect,
+                "horizontal",
                 useblit=True,
-                props=dict(alpha=0.2, facecolor='red'),
+                props={"alpha": 0.2, "facecolor": "red"},
                 interactive=True,
-                drag_from_anywhere=True
+                drag_from_anywhere=True,
             )
             print("  Seleccion ACTIVADA")
         else:
@@ -432,33 +485,38 @@ def interactive_normalization(wavelength, flux, filename):
     # ── Teclado ───────────────────────────────────────────────────────────────
 
     def on_key(event):
-        if event.key == 'a':
+        if event.key == "a":
             toggle_selection()
 
-        elif event.key == 'b':
-            if not ranges or not ranges[-1]['regions']:
+        elif event.key == "b":
+            if not ranges or not ranges[-1]["regions"]:
                 print("  Define al menos una region antes de crear un nuevo rango.")
                 return
             seal_range(ranges[-1])
             current_poly_order[0] = 5
             ridx_new = len(ranges)
-            ranges.append({
-                'regions': [], 'poly_order': current_poly_order[0],
-                'fit_model': None, 'reject': None,
-                'poly_line': None, 'reject_scatter': None,
-                'region_patches': [], 'used_points_handle': None,
-            })
-            print(f"  Rango {ridx_new} sellado. "
-                  f"Rango {ridx_new + 1} activo.")
+            ranges.append(
+                {
+                    "regions": [],
+                    "poly_order": current_poly_order[0],
+                    "fit_model": None,
+                    "reject": None,
+                    "poly_line": None,
+                    "reject_scatter": None,
+                    "region_patches": [],
+                    "used_points_handle": None,
+                }
+            )
+            print(f"  Rango {ridx_new} sellado. Rango {ridx_new + 1} activo.")
             fig.canvas.draw_idle()
 
-        elif event.key == 'e':
+        elif event.key == "e":
             if not ranges:
                 return
             r = ranges[-1]
             ridx = len(ranges) - 1
 
-            if not r['regions']:
+            if not r["regions"]:
                 # Rango vacio (creado con 'b' pero sin regiones aun)
                 ranges.pop()
                 print(f"  Rango {ridx + 1} (vacio) eliminado.")
@@ -467,96 +525,97 @@ def interactive_normalization(wavelength, flux, filename):
                 update_display(preserve_view=True)
                 return
 
-            patch = r['region_patches'].pop()
+            patch = r["region_patches"].pop()
             patch.remove()
-            removed = r['regions'].pop()
-            print(f"  Region [{removed[0]:.2f}, {removed[1]:.2f}] A eliminada. "
-                  f"Quedan {len(r['regions'])} en R{ridx + 1}.")
+            removed = r["regions"].pop()
+            print(
+                f"  Region [{removed[0]:.2f}, {removed[1]:.2f}] A eliminada. "
+                f"Quedan {len(r['regions'])} en R{ridx + 1}."
+            )
 
-            if r['regions']:
+            if r["regions"]:
                 refit_range(r, ridx)
             else:
-                if r['poly_line'] is not None:
-                    r['poly_line'].remove()
-                    r['poly_line'] = None
-                if r['reject_scatter'] is not None:
-                    r['reject_scatter'].remove()
-                    r['reject_scatter'] = None
+                if r["poly_line"] is not None:
+                    r["poly_line"].remove()
+                    r["poly_line"] = None
+                if r["reject_scatter"] is not None:
+                    r["reject_scatter"].remove()
+                    r["reject_scatter"] = None
                 ranges.pop()
-                print(f"  Rango {ridx + 1} eliminado. "
-                      f"Quedan {len(ranges)} rango(s).")
+                print(f"  Rango {ridx + 1} eliminado. Quedan {len(ranges)} rango(s).")
                 if ranges:
                     activate_range(ranges[-1])
             update_display(preserve_view=True)
 
-        elif event.key in ('+', '='):
+        elif event.key in ("+", "="):
             if ranges:
                 r = ranges[-1]
-                r['poly_order'] = min(r['poly_order'] + 1, 20)
-                current_poly_order[0] = r['poly_order']
+                r["poly_order"] = min(r["poly_order"] + 1, 20)
+                current_poly_order[0] = r["poly_order"]
                 print(f"  Orden R{len(ranges)}: {r['poly_order']}")
                 refit_range(r, len(ranges) - 1)
                 update_display(preserve_view=True)
 
-        elif event.key == '-':
+        elif event.key == "-":
             if ranges:
                 r = ranges[-1]
-                r['poly_order'] = max(r['poly_order'] - 1, 0)
-                current_poly_order[0] = r['poly_order']
+                r["poly_order"] = max(r["poly_order"] - 1, 0)
+                current_poly_order[0] = r["poly_order"]
                 print(f"  Orden R{len(ranges)}: {r['poly_order']}")
                 refit_range(r, len(ranges) - 1)
                 update_display(preserve_view=True)
 
-        elif event.key == 'up':
+        elif event.key == "up":
             sigma_lower[0] = round(sigma_lower[0] + 0.5, 1)
             print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
             for i, r in enumerate(ranges):
                 refit_range(r, i)
             update_display(preserve_view=True)
 
-        elif event.key == 'down':
+        elif event.key == "down":
             sigma_lower[0] = max(0.5, round(sigma_lower[0] - 0.5, 1))
             print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
             for i, r in enumerate(ranges):
                 refit_range(r, i)
             update_display(preserve_view=True)
 
-        elif event.key == 'right':
+        elif event.key == "right":
             sigma_upper[0] = round(sigma_upper[0] + 0.5, 1)
             print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
             for i, r in enumerate(ranges):
                 refit_range(r, i)
             update_display(preserve_view=True)
 
-        elif event.key == 'left':
+        elif event.key == "left":
             sigma_upper[0] = max(0.5, round(sigma_upper[0] - 0.5, 1))
             print(f"  sigma_lower: {sigma_lower[0]}  sigma_upper: {sigma_upper[0]}")
             for i, r in enumerate(ranges):
                 refit_range(r, i)
             update_display(preserve_view=True)
 
-        elif event.key == 'q':
+        elif event.key == "q":
             if span_selector[0] is not None:
                 span_selector[0].disconnect_events()
-            n_valid = sum(1 for r in ranges if r['regions'])
+            n_valid = sum(1 for r in ranges if r["regions"])
             print(f"\n  Finalizando normalizacion ({n_valid} rango(s))")
             plt.close(fig)
 
     def on_scroll_norm(event):
         if event.inaxes not in (ax_spec, ax_norm):
             return
-        factor = 0.85 if event.button == 'up' else 1.0 / 0.85
+        factor = 0.85 if event.button == "up" else 1.0 / 0.85
         xmin, xmax = ax_spec.get_xlim()
         xc = event.xdata
         ax_spec.set_xlim(xc + (xmin - xc) * factor, xc + (xmax - xc) * factor)
         fig.canvas.draw_idle()
 
-    fig.canvas.mpl_connect('key_press_event', on_key)
-    fig.canvas.mpl_connect('scroll_event', on_scroll_norm)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    fig.canvas.mpl_connect("scroll_event", on_scroll_norm)
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("MODO NORMALIZACION")
-    print("="*60)
+    print("=" * 60)
     print("  a         activar/desactivar seleccion de regiones")
     print("  b         sellar rango activo e iniciar nuevo rango")
     print("  e         eliminar ultima region (elimina rango si queda vacio)")
@@ -569,37 +628,41 @@ def interactive_normalization(wavelength, flux, filename):
     print("  o         modo zoom (arrastrar para seleccionar)")
     print("  scroll    zoom in/out")
     print("  home      reset vista")
-    print("="*60)
+    print("=" * 60)
 
     plt.tight_layout()
     plt.show()
 
     # ── Calculo final ─────────────────────────────────────────────────────────
-    valid_ranges = [r for r in ranges if r['regions']]
+    valid_ranges = [r for r in ranges if r["regions"]]
     if not valid_ranges:
         return None
 
     resp = input("  Guardar normalizacion? [S/n]: ").strip().lower()
-    if resp in ('n', 'no'):
+    if resp in ("n", "no"):
         print("  Normalizacion descartada.")
         return None
 
     # Reajuste limpio de todos los rangos
     for ridx, r in enumerate(valid_ranges):
-        mask = mask_generator(wavelength, r['regions'])
-        if np.sum(mask) > r['poly_order'] + 1:
+        mask = mask_generator(wavelength, r["regions"])
+        if np.sum(mask) > r["poly_order"] + 1:
             try:
                 cont_model, _, _ = fit_cont_sigma(
-                    wavelength[mask], flux[mask],
-                    model='chebyshev', order=r['poly_order'],
-                    use_sigma_clip=True, sigma_lower=sigma_lower[0], sigma_upper=sigma_upper[0]
+                    wavelength[mask],
+                    flux[mask],
+                    model="chebyshev",
+                    order=r["poly_order"],
+                    use_sigma_clip=True,
+                    sigma_lower=sigma_lower[0],
+                    sigma_upper=sigma_upper[0],
                 )
-                r['fit_model'] = cont_model
-            except Exception as e:
+                r["fit_model"] = cont_model
+            except ValueError as e:
                 print(f"  Error reajuste final R{ridx + 1}: {e}")
-                r['fit_model'] = None
+                r["fit_model"] = None
         else:
-            r['fit_model'] = None
+            r["fit_model"] = None
 
     continuum = build_continuum()
     if continuum is not None:
@@ -608,7 +671,9 @@ def interactive_normalization(wavelength, flux, filename):
     return None
 
 
-def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, vhelio=0.0):
+def interactive_gaussian_fitting(
+    wavelength, flux, filename, params_dict=None, vhelio=0.0
+):
     """
     Interfaz grafica para ajustar gaussianas a lineas espectrales.
 
@@ -654,25 +719,25 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
     gaussians = []
     # Pasos de la gaussiana en construccion: [center, depth] o [center, depth, left_wl]
     current_gaussian = None
-    step = None          # 'center' | 'fwhm'
-    result = None        # lmfit.ModelResult del ultimo ajuste exitoso
+    step = None  # 'center' | 'fwhm'
+    result = None  # lmfit.ModelResult del ultimo ajuste exitoso
 
     # Handles graficos para limpiar sin cla()
-    gaussian_lines = []      # lineas y marcadores de gaussianas manuales
-    fitted_lines = []        # curva del ajuste final
-    gaussian_patches = []    # artists temporales durante la definicion
+    gaussian_lines = []  # lineas y marcadores de gaussianas manuales
+    fitted_lines = []  # curva del ajuste final
+    gaussian_patches = []  # artists temporales durante la definicion
     json_preview_lines = []  # curvas de prevista cargadas del JSON al inicio
 
     # Continuo local: dos regiones (izquierda y derecha de la línea)
-    bkg_regions = []       # [[wmin1,wmax1], [wmin2,wmax2]] — max 2
-    bkg_coeffs = [None]    # [slope, intercept] de np.polyfit
-    bkg_patches = []       # axvspan verdes
-    bkg_line_art = [None]  # linea verde del continuo ajustado
-    bkg_span = [None]      # SpanSelector activo
+    bkg_regions = []  # [[wmin1,wmax1], [wmin2,wmax2]] — max 2
+    bkg_coeffs = [None]  # [slope, intercept] de np.polyfit
+    bkg_patches = []  # axvspan verdes
+    bkg_line_art: list[Line2D | None] = [None]  # linea verde del continuo ajustado
+    bkg_span: list[SpanSelector | None] = [None]  # SpanSelector activo
 
     # Modo de borrado de puntos
     erase_mode = False
-    removed_indices = []     # indices en el array original de puntos eliminados
+    removed_indices = []  # indices en el array original de puntos eliminados
 
     # Copias de trabajo; se actualizan al borrar puntos
     original_wavelength = wavelength.copy()
@@ -681,35 +746,45 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
     current_flux = flux.copy()
 
     # Configuracion inicial del eje
-    spectrum_line, = ax.plot(current_wavelength, current_flux, 'k-',
-                             linewidth=1.5, label='Spectrum')
-    ax.set_xlabel('Wavelength (A)', fontsize=12)
-    ax.set_ylabel('Flux', fontsize=12)
-    ax.set_title(f'Gaussian Fit: {os.path.basename(filename)}',
-                 fontsize=14, fontweight='bold')
+    (spectrum_line,) = ax.plot(
+        current_wavelength, current_flux, "k-", linewidth=1.5, label="Spectrum"
+    )
+    ax.set_xlabel("Wavelength (A)", fontsize=12)
+    ax.set_ylabel("Flux", fontsize=12)
+    ax.set_title(
+        f"Gaussian Fit: {os.path.basename(filename)}", fontsize=14, fontweight="bold"
+    )
     ax.set_ylim(*calculate_smart_ylimits(current_flux))
     ax.set_xlim(current_wavelength[0], current_wavelength[-1])
-    ax.grid(True, alpha=0.3, linestyle='--')
-    ax.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
-    ax.axhline(y=1, color='red', linestyle='--', alpha=0.5, label='Referencia (1.0)')
+    ax.grid(True, alpha=0.3, linestyle="--")
+    ax.axhline(y=0, color="gray", linestyle=":", alpha=0.5)
+    ax.axhline(y=1, color="red", linestyle="--", alpha=0.5, label="Referencia (1.0)")
 
     # Texto de estado superpuesto en la figura (actualizado por update_status)
-    status_text = ax.text(0.02, 0.98, '',
-                          transform=ax.transAxes, fontsize=9,
-                          verticalalignment='top',
-                          bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    status_text = ax.text(
+        0.02,
+        0.98,
+        "",
+        transform=ax.transAxes,
+        fontsize=9,
+        verticalalignment="top",
+        bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
+    )
 
     def update_status():
         """Actualiza el texto de estado superpuesto en la figura."""
+        msg = ""
         if erase_mode:
-            msg = "MODO BORRADO - Click en un punto para eliminarlo (b: restaurar todos)"
+            msg = (
+                "MODO BORRADO - Click en un punto para eliminarlo (b: restaurar todos)"
+            )
         elif step is None:
             msg = "Listo. d: nueva gaussiana"
             if gaussians:
                 msg += "  |  a: ajustar"
-        elif step == 'center':
+        elif step == "center":
             msg = "Paso 1/2: click en el CENTRO de la linea"
-        elif step == 'fwhm':
+        elif step == "fwhm":
             msg = "Paso 2/2: click a cualquier lado del centro para definir el FWHM (simetrico)"
 
         # Resumen de gaussianas definidas
@@ -735,14 +810,29 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         status_text.set_text(msg + info)
         fig.canvas.draw_idle()
 
-    def draw_gaussian_line(center, amplitude, fwhm, color='blue', alpha=0.8,
-                           linewidth=3, linestyle='-', label=None):
+    def draw_gaussian_line(
+        center,
+        amplitude,
+        fwhm,
+color: str | tuple[float, float, float, float] = "blue",
+        alpha=0.8,
+        linewidth=3,
+        linestyle="-",
+        label=None,
+    ):
         """Dibuja una gaussiana sobre el espectro actual y devuelve el handle."""
         y = gaussian(current_wavelength, center, amplitude, fwhm)
         if bkg_coeffs[0] is not None:
             y = y * np.polyval(bkg_coeffs[0], current_wavelength)
-        line, = ax.plot(current_wavelength, y, color=color, linewidth=linewidth,
-                        linestyle=linestyle, alpha=alpha, label=label)
+        (line,) = ax.plot(
+            current_wavelength,
+            y,
+            color=color,
+            linewidth=linewidth,
+            linestyle=linestyle,
+            alpha=alpha,
+            label=label,
+        )
         return line
 
     def clear_current_gaussian():
@@ -753,7 +843,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         for item in gaussian_patches:
             try:
                 item.remove()
-            except Exception:
+            except ValueError:
                 pass
         gaussian_patches.clear()
         update_status()
@@ -774,33 +864,56 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         clear_current_gaussian()
 
         color = plt.cm.tab10(len(gaussians) % 10)
-        line = draw_gaussian_line(center, amplitude, fwhm_val,
-                                  color=color, alpha=0.9, linestyle='--',
-                                  label=f'G{len(gaussians)+1}: {center:.2f} A')
+        line = draw_gaussian_line(
+            center,
+            amplitude,
+            fwhm_val,
+            color=color,
+            alpha=0.9,
+            linestyle="--",
+            label=f"G{len(gaussians) + 1}: {center:.2f} A",
+        )
         gaussian_lines.append(line)
 
         # Marcador de centro
         idx = np.argmin(np.abs(current_wavelength - center))
-        center_marker = ax.plot(center, current_flux[idx], 'r|',
-                                markersize=10, alpha=0.7)[0]
+        center_marker = ax.plot(
+            center, current_flux[idx], "r|", markersize=10, alpha=0.7
+        )[0]
         gaussian_lines.append(center_marker)
 
         # Marcadores de FWHM
         half_max = amplitude / 2
         flux_at_center = current_flux[idx]
-        left_marker = ax.plot(center - fwhm_val / 2, flux_at_center + half_max,
-                              'b<', markersize=8, alpha=0.7)[0]
-        right_marker = ax.plot(center + fwhm_val / 2, flux_at_center + half_max,
-                               'b>', markersize=8, alpha=0.7)[0]
-        fwhm_line = ax.plot([center - fwhm_val / 2, center + fwhm_val / 2],
-                            [flux_at_center + half_max, flux_at_center + half_max],
-                            'b:', alpha=0.5, linewidth=1)[0]
+        left_marker = ax.plot(
+            center - fwhm_val / 2,
+            flux_at_center + half_max,
+            "b<",
+            markersize=8,
+            alpha=0.7,
+        )[0]
+        right_marker = ax.plot(
+            center + fwhm_val / 2,
+            flux_at_center + half_max,
+            "b>",
+            markersize=8,
+            alpha=0.7,
+        )[0]
+        fwhm_line = ax.plot(
+            [center - fwhm_val / 2, center + fwhm_val / 2],
+            [flux_at_center + half_max, flux_at_center + half_max],
+            "b:",
+            alpha=0.5,
+            linewidth=1,
+        )[0]
         gaussian_lines.extend([left_marker, right_marker, fwhm_line])
 
         gaussians.append((center, amplitude, fwhm_val))
-        ax.legend(loc='best')
+        ax.legend(loc="best")
 
-        print(f"  G{len(gaussians)}: lambda={center:.2f} A  profundidad={depth:.3f}  FWHM={fwhm_val:.2f} A")
+        print(
+            f"  G{len(gaussians)}: lambda={center:.2f} A  profundidad={depth:.3f}  FWHM={fwhm_val:.2f} A"
+        )
         update_status()
 
     def build_manual_params():
@@ -811,7 +924,7 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         tol = 0.5
         fit_params = {}
         for i, (center, amplitude, fwhm_val) in enumerate(gaussians, 1):
-            prefix = f'g{i}_'
+            prefix = f"g{i}_"
             sigma = fwhm_val / 2.3548200
             # Escalar amplitud al espacio del flujo real usando el continuo en el centro
             if bkg_coeffs[0] is not None:
@@ -819,25 +932,32 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             else:
                 cont_at_center = float(np.percentile(current_flux, 95))
             amp = amplitude * cont_at_center * sigma * np.sqrt(2 * np.pi)
-            fit_params[f'{prefix}center'] = {'value': center,
-                                             'min': center * (1 - tol),
-                                             'max': center * (1 + tol)}
-            fit_params[f'{prefix}sigma'] = {'value': sigma,
-                                            'min': sigma * (1 - tol),
-                                            'max': sigma * (1 + tol)}
-            fit_params[f'{prefix}amplitude'] = {
-                'value': amp,
-                'min': amp * (1 + tol) if amp < 0 else amp * (1 - tol),
-                'max': amp * (1 - tol) if amp < 0 else amp * (1 + tol),
+            fit_params[f"{prefix}center"] = {
+                "value": center,
+                "min": center * (1 - tol),
+                "max": center * (1 + tol),
+            }
+            fit_params[f"{prefix}sigma"] = {
+                "value": sigma,
+                "min": sigma * (1 - tol),
+                "max": sigma * (1 + tol),
+            }
+            fit_params[f"{prefix}amplitude"] = {
+                "value": amp,
+                "min": amp * (1 + tol) if amp < 0 else amp * (1 - tol),
+                "max": amp * (1 - tol) if amp < 0 else amp * (1 + tol),
             }
         # Fondo lineal: inicializar desde el ajuste del continuo si está disponible
         if bkg_coeffs[0] is not None:
-            fit_params['bkg_slope']     = {'value': float(bkg_coeffs[0][0]), 'vary': True}
-            fit_params['bkg_intercept'] = {'value': float(bkg_coeffs[0][1]), 'vary': True}
+            fit_params["bkg_slope"] = {"value": float(bkg_coeffs[0][0]), "vary": True}
+            fit_params["bkg_intercept"] = {
+                "value": float(bkg_coeffs[0][1]),
+                "vary": True,
+            }
         else:
             flux_scale = float(np.percentile(current_flux, 95))
-            fit_params['bkg_intercept'] = {'value': flux_scale, 'vary': True}
-            fit_params['bkg_slope']     = {'value': 0.0, 'vary': True}
+            fit_params["bkg_intercept"] = {"value": flux_scale, "vary": True}
+            fit_params["bkg_slope"] = {"value": 0.0, "vary": True}
         return fit_params
 
     def combine_params():
@@ -859,8 +979,8 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         json_gaussians = {}
         if params_dict:
             for key, value in params_dict.items():
-                if key.startswith('g') and '_' in key:
-                    parts = key.split('_', 1)
+                if key.startswith("g") and "_" in key:
+                    parts = key.split("_", 1)
                     try:
                         g_num = int(parts[0][1:])
                         param_type = parts[1]
@@ -885,17 +1005,19 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
 
         # Cantidades distintas: preguntar
         if n_manual != n_json:
-            print(f"\n  Aviso: el JSON tiene {n_json} gaussiana(s) y se definieron "
-                  f"{n_manual} manualmente.")
+            print(
+                f"\n  Aviso: el JSON tiene {n_json} gaussiana(s) y se definieron "
+                f"{n_manual} manualmente."
+            )
             print("  Opciones:")
             print("    1  usar solo el JSON")
             print("    2  usar solo las gaussianas manuales")
             print("    3  cancelar")
             choice = input("  Eleccion (1-3): ").strip()
-            if choice == '1':
+            if choice == "1":
                 print("  Usando parametros del JSON.")
                 return params_dict.copy()
-            elif choice == '2':
+            elif choice == "2":
                 print("  Usando gaussianas manuales.")
                 return build_manual_params()
             else:
@@ -908,42 +1030,54 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         for i in range(1, n_manual + 1):
             if i not in json_gaussians or i - 1 >= len(gaussians):
                 continue
-            prefix = f'g{i}_'
+            prefix = f"g{i}_"
             jg = json_gaussians[i]
             manual_center, manual_amplitude, manual_fwhm = gaussians[i - 1]
             manual_sigma = manual_fwhm / 2.3548200
             manual_amp = manual_amplitude * manual_sigma * np.sqrt(2 * np.pi)
 
-            for param, manual_val in [('center', manual_center),
-                                       ('sigma', manual_sigma),
-                                       ('amplitude', manual_amp)]:
-                if param in jg and not jg[param].get('vary', True):
+            for param, manual_val in [
+                ("center", manual_center),
+                ("sigma", manual_sigma),
+                ("amplitude", manual_amp),
+            ]:
+                if param in jg and not jg[param].get("vary", True):
                     # Parametro fijo en el JSON: respetar el valor del JSON
-                    combined[f'{prefix}{param}'] = jg[param]
+                    combined[f"{prefix}{param}"] = jg[param]
                 elif param in jg:
                     # Parametro libre: valor manual como estimacion inicial,
                     # pero se respetan min, max y vary del JSON
                     entry = dict(jg[param])
-                    entry['value'] = manual_val
-                    combined[f'{prefix}{param}'] = entry
+                    entry["value"] = manual_val
+                    combined[f"{prefix}{param}"] = entry
                 else:
-                    combined[f'{prefix}{param}'] = {'value': manual_val}
+                    combined[f"{prefix}{param}"] = {"value": manual_val}
 
         # Fondo lineal: respetar JSON si tiene bkg_intercept/slope; si tiene bkg_c (legacy) usarlo como intercept
-        if 'bkg_intercept' in params_dict or 'bkg_slope' in params_dict:
-            combined['bkg_intercept'] = params_dict.get('bkg_intercept', {'value': 1.0, 'vary': True})
-            combined['bkg_slope'] = params_dict.get('bkg_slope', {'value': 0.0, 'vary': True})
-        elif 'bkg_c' in params_dict:
-            combined['bkg_intercept'] = {'value': params_dict['bkg_c'].get('value', 1.0), 'vary': True}
-            combined['bkg_slope'] = {'value': 0.0, 'vary': True}
+        if "bkg_intercept" in params_dict or "bkg_slope" in params_dict:
+            combined["bkg_intercept"] = params_dict.get(
+                "bkg_intercept", {"value": 1.0, "vary": True}
+            )
+            combined["bkg_slope"] = params_dict.get(
+                "bkg_slope", {"value": 0.0, "vary": True}
+            )
+        elif "bkg_c" in params_dict:
+            combined["bkg_intercept"] = {
+                "value": params_dict["bkg_c"].get("value", 1.0),
+                "vary": True,
+            }
+            combined["bkg_slope"] = {"value": 0.0, "vary": True}
         else:
             if bkg_coeffs[0] is not None:
-                combined['bkg_slope']     = {'value': float(bkg_coeffs[0][0]), 'vary': True}
-                combined['bkg_intercept'] = {'value': float(bkg_coeffs[0][1]), 'vary': True}
+                combined["bkg_slope"] = {"value": float(bkg_coeffs[0][0]), "vary": True}
+                combined["bkg_intercept"] = {
+                    "value": float(bkg_coeffs[0][1]),
+                    "vary": True,
+                }
             else:
                 flux_scale = float(np.percentile(current_flux, 95))
-                combined['bkg_intercept'] = {'value': flux_scale, 'vary': True}
-                combined['bkg_slope']     = {'value': 0.0, 'vary': True}
+                combined["bkg_intercept"] = {"value": flux_scale, "vary": True}
+                combined["bkg_slope"] = {"value": 0.0, "vary": True}
         return combined
 
     def do_fit():
@@ -958,7 +1092,9 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             if bkg_regions:
                 wmin_fit = min(r[0] for r in bkg_regions)
                 wmax_fit = max(r[1] for r in bkg_regions)
-                rmask = (current_wavelength >= wmin_fit) & (current_wavelength <= wmax_fit)
+                rmask = (current_wavelength >= wmin_fit) & (
+                    current_wavelength <= wmax_fit
+                )
                 fit_wl = current_wavelength[rmask]
                 fit_fl = current_flux[rmask]
             else:
@@ -977,59 +1113,78 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             fitted_lines.clear()
             json_preview_lines.clear()
 
-            fitted_line, = ax.plot(fit_wl, result.best_fit,
-                                   color='red', linewidth=4, alpha=0.6,
-                                   label='Ajuste total')
+            (fitted_line,) = ax.plot(
+                fit_wl,
+                result.best_fit,
+                color="red",
+                linewidth=4,
+                alpha=0.6,
+                label="Ajuste total",
+            )
             fitted_lines.append(fitted_line)
 
             # Graficar componentes individuales: bkg + g{i}(x)
             components = result.eval_components(x=fit_wl)
-            bkg = components.get('bkg_', 0.0)
-            g_keys = sorted(k for k in components if k.startswith('g'))
+            bkg = components.get("bkg_", 0.0)
+            g_keys = sorted(k for k in components if k.startswith("g"))
             for idx, key in enumerate(g_keys):
                 color = plt.cm.tab10(idx % 10)
-                g_num = key.rstrip('_')
-                center_val = result.params.get(f'{key}center')
-                center_str = f'{center_val.value:.2f} A' if center_val else g_num
-                comp_line, = ax.plot(fit_wl, bkg + components[key],
-                                     color=color, linewidth=2, linestyle=':',
-                                     alpha=0.9, label=f'{g_num}: {center_str}')
+                g_num = key.rstrip("_")
+                center_val = result.params.get(f"{key}center")
+                center_str = f"{center_val.value:.2f} A" if center_val else g_num
+                (comp_line,) = ax.plot(
+                    fit_wl,
+                    bkg + components[key],
+                    color=color,
+                    linewidth=2,
+                    linestyle=":",
+                    alpha=0.9,
+                    label=f"{g_num}: {center_str}",
+                )
                 fitted_lines.append(comp_line)
 
-            ax.legend(loc='best')
+            ax.legend(loc="best")
 
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print("REPORTE DEL AJUSTE")
-            print("="*60)
+            print("=" * 60)
             print(result.fit_report())
-            print("="*60)
+            print("=" * 60)
 
             if not result.success:
-                print("\n" + "!"*60)
+                print("\n" + "!" * 60)
                 print("  *** AJUSTE NO CONVERGIO (success=False) ***")
                 # Detectar si algun centro esta pegado a sus limites
                 i = 1
                 center_at_bound = False
-                while f'g{i}_center' in result.params:
-                    p = result.params[f'g{i}_center']
-                    at_min = p.min is not None and abs(p.value - p.min) < 1e-6 * (abs(p.min) + 1)
-                    at_max = p.max is not None and abs(p.value - p.max) < 1e-6 * (abs(p.max) + 1)
+                while f"g{i}_center" in result.params:
+                    p = result.params[f"g{i}_center"]
+                    at_min = p.min is not None and abs(p.value - p.min) < 1e-6 * (
+                        abs(p.min) + 1
+                    )
+                    at_max = p.max is not None and abs(p.value - p.max) < 1e-6 * (
+                        abs(p.max) + 1
+                    )
                     if at_min or at_max:
                         bound = "minimo" if at_min else "maximo"
-                        print(f"  *** G{i}: CENTRO EN EL LIMITE {bound.upper()} "
-                              f"({p.value:.4f} A) -- RESULTADO NO CONFIABLE ***")
+                        print(
+                            f"  *** G{i}: CENTRO EN EL LIMITE {bound.upper()} "
+                            f"({p.value:.4f} A) -- RESULTADO NO CONFIABLE ***"
+                        )
                         center_at_bound = True
                     i += 1
                 if center_at_bound:
-                    print("  *** El centro es el parametro mas critico: "
-                          "los EW y VR calculados son INVALIDOS ***")
-                print("!"*60)
+                    print(
+                        "  *** El centro es el parametro mas critico: "
+                        "los EW y VR calculados son INVALIDOS ***"
+                    )
+                print("!" * 60)
 
             _print_vr_summary(result, vhelio)
 
             update_status()
 
-        except Exception as e:
+        except ValueError as e:
             print(f"  Error en el ajuste: {e}")
 
     def remove_point_at(x, y):
@@ -1075,22 +1230,30 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         for line in gaussian_lines + fitted_lines:
             try:
                 line.remove()
-            except Exception:
+            except ValueError:
                 pass
         gaussian_lines.clear()
         fitted_lines.clear()
 
         for i, (center, amplitude, fwhm_val) in enumerate(gaussians):
             color = plt.cm.tab10(i % 10)
-            line = draw_gaussian_line(center, amplitude, fwhm_val,
-                                      color=color, alpha=0.9, linestyle='--',
-                                      label=f'G{i+1}: {center:.2f} A')
+            line = draw_gaussian_line(
+                center,
+                amplitude,
+                fwhm_val,
+                color=color,
+                alpha=0.9,
+                linestyle="--",
+                label=f"G{i + 1}: {center:.2f} A",
+            )
             gaussian_lines.append(line)
 
         ax.set_ylim(*calculate_smart_ylimits(current_flux))
         erase_mode = False
-        print(f"  Punto eliminado: lambda={original_wavelength[orig_idx]:.2f} A"
-              f"  flux={original_flux[orig_idx]:.4f}  (total: {len(removed_indices)})")
+        print(
+            f"  Punto eliminado: lambda={original_wavelength[orig_idx]:.2f} A"
+            f"  flux={original_flux[orig_idx]:.4f}  (total: {len(removed_indices)})"
+        )
 
         fig.canvas.draw_idle()
         update_status()
@@ -1117,11 +1280,13 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
             print("  Ya hay 2 regiones. Presiona W para limpiar y redefinir.")
             return
         bkg_regions.append([xmin, xmax])
-        bkg_patches.append(ax.axvspan(xmin, xmax, alpha=0.2, color='green', zorder=0))
+        bkg_patches.append(ax.axvspan(xmin, xmax, alpha=0.2, color="green", zorder=0))
         remaining = 2 - len(bkg_regions)
         if remaining > 0:
-            print(f"  Region {len(bkg_regions)}/2 [{xmin:.2f}, {xmax:.2f}] A. "
-                  f"Arrastra para la {len(bkg_regions)+1}a region.")
+            print(
+                f"  Region {len(bkg_regions)}/2 [{xmin:.2f}, {xmax:.2f}] A. "
+                f"Arrastra para la {len(bkg_regions) + 1}a region."
+            )
         else:
             _fit_bkg_line()
             if bkg_span[0] is not None:
@@ -1142,14 +1307,20 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         if bkg_line_art[0] is not None:
             try:
                 bkg_line_art[0].remove()
-            except Exception:
+            except ValueError:
                 pass
         wmins = [r[0] for r in bkg_regions]
         wmaxs = [r[1] for r in bkg_regions]
         x_draw = np.linspace(min(wmins), max(wmaxs), 300)
-        bkg_line_art[0], = ax.plot(x_draw, np.polyval(coeffs, x_draw),
-                                    'g-', linewidth=2, alpha=0.85, label='Continuo')
-        ax.legend(loc='best')
+        (bkg_line_art[0],) = ax.plot(
+            x_draw,
+            np.polyval(coeffs, x_draw),
+            "g-",
+            linewidth=2,
+            alpha=0.85,
+            label="Continuo",
+        )
+        ax.legend(loc="best")
         fig.canvas.draw_idle()
         print(f"  Continuo ajustado: slope={coeffs[0]:.3g}  intercept={coeffs[1]:.3g}")
 
@@ -1163,16 +1334,16 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
         for patch in bkg_patches:
             try:
                 patch.remove()
-            except Exception:
+            except ValueError:
                 pass
         bkg_patches.clear()
         if bkg_line_art[0] is not None:
             try:
                 bkg_line_art[0].remove()
-            except Exception:
+            except ValueError:
                 pass
             bkg_line_art[0] = None
-        ax.legend(loc='best')
+        ax.legend(loc="best")
         fig.canvas.draw_idle()
         print("  Continuo eliminado")
         update_status()
@@ -1192,33 +1363,38 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
 
         ymin, ymax = ax.get_ylim()
 
-        if step == 'center':
+        if step == "center":
             if bkg_coeffs[0] is not None:
                 bkg_at_x = np.polyval(bkg_coeffs[0], x)
                 depth = y / bkg_at_x if bkg_at_x != 0 else np.clip(y, 0.0, 1.2)
             else:
                 depth = np.clip(y, 0.0, 1.2)
-            vline = ax.vlines(x, ymin, ymax, color='blue', linestyle='--', alpha=0.5)
-            label = ax.text(x, ymax * 0.95, f'{x:.2f} A',
-                            color='blue', ha='center', fontsize=9)
+            vline = ax.vlines(x, ymin, ymax, color="blue", linestyle="--", alpha=0.5)
+            label = ax.text(
+                x, ymax * 0.95, f"{x:.2f} A", color="blue", ha="center", fontsize=9
+            )
             gaussian_patches.extend([vline, label])
             current_gaussian = [x, depth]
-            step = 'fwhm'
+            step = "fwhm"
             print(f"  Centro: {x:.2f} A  profundidad: {depth:.3f}")
 
-        elif step == 'fwhm':
+        elif step == "fwhm":
+            if current_gaussian is None:
+                return
             center = current_gaussian[0]
             half_width = abs(x - center)
             if half_width == 0:
                 print("  Click en un punto distinto al centro.")
                 return
-            left_x  = center - half_width
+            left_x = center - half_width
             right_x = center + half_width
             for fx in (left_x, right_x):
-                vline = ax.vlines(fx, ymin, ymax, color='orange', linestyle='--', alpha=0.5)
+                vline = ax.vlines(
+                    fx, ymin, ymax, color="orange", linestyle="--", alpha=0.5
+                )
                 gaussian_patches.append(vline)
             current_gaussian.extend([left_x, right_x])
-            print(f"  FWHM: {2*half_width:.2f} A")
+            print(f"  FWHM: {2 * half_width:.2f} A")
             finalize_gaussian()
 
         update_status()
@@ -1226,35 +1402,35 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
     def on_key(event):
         nonlocal step, current_gaussian, result, erase_mode
 
-        if event.key == 'q':
+        if event.key == "q":
             plt.close(fig)
             return
 
         # Dentro del modo de borrado solo se aceptan 'e'/'escape' para salir y 'b' para restaurar
         if erase_mode:
-            if event.key in ('e', 'escape'):
+            if event.key in ("e", "escape"):
                 erase_mode = False
                 print("  Modo borrado desactivado.")
                 update_status()
-            elif event.key == 'b':
+            elif event.key == "b":
                 restore_all_points()
             return
 
-        if event.key == 'e':
+        if event.key == "e":
             erase_mode = True
             print("  Modo borrado activado. Click en un punto para eliminarlo.")
             update_status()
 
-        elif event.key == 'd':
+        elif event.key == "d":
             if step is None:
-                step = 'center'
+                step = "center"
                 current_gaussian = []
                 update_status()
 
-        elif event.key == 'a':
+        elif event.key == "a":
             do_fit()
 
-        elif event.key == 'b':
+        elif event.key == "b":
             # Eliminar la ultima gaussiana definida
             if gaussians:
                 gaussians.pop()
@@ -1268,82 +1444,99 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
                     line.remove()
                 fitted_lines.clear()
                 result = None
-                ax.legend(loc='best')
+                ax.legend(loc="best")
                 update_status()
 
-        elif event.key == 'c':
+        elif event.key == "c":
             for line in gaussian_lines + fitted_lines:
                 try:
                     line.remove()
-                except Exception:
+                except ValueError:
                     pass
             gaussians.clear()
             gaussian_lines.clear()
             fitted_lines.clear()
             result = None
-            ax.legend(loc='best')
+            ax.legend(loc="best")
             update_status()
 
-        elif event.key == 'w':
+        elif event.key == "w":
             if bkg_span[0] is not None:
                 bkg_span[0].set_visible(False)
                 bkg_span[0].disconnect_events()
             bkg_span[0] = SpanSelector(
-                ax, _onselect_bkg, 'horizontal', useblit=True,
-                props=dict(alpha=0.2, facecolor='green'),
-                interactive=True, drag_from_anywhere=True)
+                ax,
+                _onselect_bkg,
+                "horizontal",
+                useblit=True,
+                props={"alpha": 0.2, "facecolor": "green"},
+                interactive=True,
+                drag_from_anywhere=True,
+            )
             remaining = 2 - len(bkg_regions)
-            print(f"  Arrastra para definir region de continuo ({remaining} restante(s))")
+            print(
+                f"  Arrastra para definir region de continuo ({remaining} restante(s))"
+            )
 
-        elif event.key == 'W':
+        elif event.key == "W":
             _clear_bkg()
 
-        elif event.key == 'escape':
+        elif event.key == "escape":
             if step is not None:
                 clear_current_gaussian()
 
     def on_scroll_gauss(event):
         if event.inaxes != ax:
             return
-        factor = 0.85 if event.button == 'up' else 1.0 / 0.85
+        factor = 0.85 if event.button == "up" else 1.0 / 0.85
         xmin, xmax = ax.get_xlim()
         xc = event.xdata
         ax.set_xlim(xc + (xmin - xc) * factor, xc + (xmax - xc) * factor)
         fig.canvas.draw_idle()
 
-    fig.canvas.mpl_connect('button_press_event', on_click)
-    fig.canvas.mpl_connect('key_press_event', on_key)
-    fig.canvas.mpl_connect('scroll_event', on_scroll_gauss)
+    fig.canvas.mpl_connect("button_press_event", on_click)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    fig.canvas.mpl_connect("scroll_event", on_scroll_gauss)
 
     # Si se cargo un JSON, dibujar las gaussianas como vista previa al inicio
     if params_dict:
         i = 1
-        while f'g{i}_center' in params_dict:
+        while f"g{i}_center" in params_dict:
             try:
-                center = params_dict[f'g{i}_center']['value']
-                sigma  = params_dict[f'g{i}_sigma']['value']
-                amp    = params_dict[f'g{i}_amplitude']['value']
+                center = params_dict[f"g{i}_center"]["value"]
+                sigma = params_dict[f"g{i}_sigma"]["value"]
+                amp = params_dict[f"g{i}_amplitude"]["value"]
                 height = amp / (sigma * np.sqrt(2 * np.pi))
-                fwhm   = sigma * 2.3548200
-                color  = plt.cm.tab10((i - 1) % 10)
+                fwhm = sigma * 2.3548200
+                color = plt.cm.tab10((i - 1) % 10)
                 y = gaussian(current_wavelength, center, height, fwhm)
-                line, = ax.plot(current_wavelength, y, color=color,
-                                linewidth=1.5, linestyle='--', alpha=0.7,
-                                label=f'JSON G{i}: {center:.2f} A')
+                (line,) = ax.plot(
+                    current_wavelength,
+                    y,
+                    color=color,
+                    linewidth=1.5,
+                    linestyle="--",
+                    alpha=0.7,
+                    label=f"JSON G{i}: {center:.2f} A",
+                )
                 json_preview_lines.append(line)
-                print(f"  JSON G{i}: lambda={center:.2f} A  sigma={sigma:.3f}  amp={amp:.4f}")
+                print(
+                    f"  JSON G{i}: lambda={center:.2f} A  sigma={sigma:.3f}  amp={amp:.4f}"
+                )
             except (KeyError, TypeError) as e:
                 print(f"  Aviso: no se pudo dibujar JSON G{i}: {e}")
             i += 1
         if json_preview_lines:
-            ax.legend(loc='best')
-            print(f"  {len(json_preview_lines)} gaussiana(s) del JSON graficadas (---).")
+            ax.legend(loc="best")
+            print(
+                f"  {len(json_preview_lines)} gaussiana(s) del JSON graficadas (---)."
+            )
 
     update_status()
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("MODO AJUSTE DE GAUSSIANAS")
-    print("="*60)
+    print("=" * 60)
     print("  w         definir region de continuo (2 drags: izq y der de la linea)")
     print("  W         limpiar regiones de continuo")
     print("  d         nueva gaussiana (2 clics: centro, un lado del FWHM)")
@@ -1354,10 +1547,12 @@ def interactive_gaussian_fitting(wavelength, flux, filename, params_dict=None, v
     print("  escape    cancelar gaussiana en construccion")
     print("  q         cerrar")
     if params_dict:
-        n_json = sum(1 for k in params_dict if k.startswith('g') and '_center' in k)
-        print(f"\n  JSON cargado: {n_json} gaussiana(s). Presiona 'a' para ajustar "
-              f"con JSON (o define gaussianas manuales primero).")
-    print("="*60)
+        n_json = sum(1 for k in params_dict if k.startswith("g") and "_center" in k)
+        print(
+            f"\n  JSON cargado: {n_json} gaussiana(s). Presiona 'a' para ajustar "
+            f"con JSON (o define gaussianas manuales primero)."
+        )
+    print("=" * 60)
 
     plt.tight_layout()
     plt.show()
@@ -1388,21 +1583,25 @@ def _print_vr_summary(result, vhelio):
     bool
         True si alguna velocidad radial supera VR_WARNING_THRESHOLD en valor absoluto.
     """
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("VELOCIDADES RADIALES  &  ANCHOS EQUIVALENTES")
-    print("="*60)
+    print("=" * 60)
 
     high_vr = False
     i = 1
-    while f'g{i}_center' in result.params:
-        p_center = result.params[f'g{i}_center']
+    while f"g{i}_center" in result.params:
+        p_center = result.params[f"g{i}_center"]
         lambda_obs = p_center.value
-        lambda_err = p_center.stderr if p_center.stderr is not None else float('nan')
+        lambda_err = p_center.stderr if p_center.stderr is not None else float("nan")
 
         # Ancho equivalente: EW = -amplitude
-        p_amp  = result.params.get(f'g{i}_amplitude')
-        ew_val = -p_amp.value if p_amp is not None else float('nan')
-        ew_err = p_amp.stderr if (p_amp is not None and p_amp.stderr is not None) else float('nan')
+        p_amp = result.params.get(f"g{i}_amplitude")
+        ew_val = -p_amp.value if p_amp is not None else float("nan")
+        ew_err = (
+            p_amp.stderr
+            if (p_amp is not None and p_amp.stderr is not None)
+            else float("nan")
+        )
         ew_str = f"{ew_val:.4f}"
         if not np.isnan(ew_err):
             ew_str += f" +/- {ew_err:.4f}"
@@ -1410,30 +1609,36 @@ def _print_vr_summary(result, vhelio):
 
         try:
             line_info = find_closest_line(lambda_obs)
-            lambda0   = line_info['lambda_rest']
-            line_name = line_info.get('name', '')
+            lambda0 = line_info["lambda_rest"]
+            line_name = line_info.get("name", "")
 
             vr_val = vr(lambda_obs, lambda0, vhelio)
-            vr_err = vrerr(lambda_err, lambda0) if not np.isnan(lambda_err) else float('nan')
+            vr_err = (
+                vrerr(lambda_err, lambda0) if not np.isnan(lambda_err) else float("nan")
+            )
 
             vr_str = f"{vr_val:.2f}"
             if not np.isnan(vr_err):
                 vr_str += f" +/- {vr_err:.2f}"
             vr_str += " km/s"
 
-            print(f"  G{i}: {line_name}  lambda0={lambda0:.3f} A"
-                  f"  lambda={lambda_obs:.4f} A")
+            print(
+                f"  G{i}: {line_name}  lambda0={lambda0:.3f} A"
+                f"  lambda={lambda_obs:.4f} A"
+            )
             print(f"       vr={vr_str}  EW={ew_str}")
 
             if abs(vr_val) > VR_WARNING_THRESHOLD:
                 high_vr = True
-        except Exception as e:
-            print(f"  G{i}: lambda={lambda_obs:.4f} A  EW={ew_str}"
-                  f"  (sin linea de referencia: {e})")
+        except (ValueError, KeyError) as e:
+            print(
+                f"  G{i}: lambda={lambda_obs:.4f} A  EW={ew_str}"
+                f"  (sin linea de referencia: {e})"
+            )
 
         i += 1
 
-    print("="*60)
+    print("=" * 60)
     return high_vr
 
 
@@ -1446,21 +1651,33 @@ def _prompt_vhelio_correction(header):
         VHELIO (km/s) a aplicar, o 0.0 si no hay VHELIO en el header o el
         usuario decide no aplicar la correccion.
     """
-    if 'VHELIO' not in header:
+    if "VHELIO" not in header:
         return 0.0
-    vhelio_raw = float(header['VHELIO'])
-    resp = input(f"  VHELIO = {vhelio_raw:.4f} km/s encontrado en el header. "
-                 f"¿Aplicar corrección heliocentrica al guardar? [S/n]: ").strip().lower()
-    if resp in ('n', 'no'):
+    vhelio_raw = float(header["VHELIO"])
+    resp = (
+        input(
+            f"  VHELIO = {vhelio_raw:.4f} km/s encontrado en el header. "
+            f"¿Aplicar corrección heliocentrica al guardar? [S/n]: "
+        )
+        .strip()
+        .lower()
+    )
+    if resp in ("n", "no"):
         print("  Corrección heliocentrica NO aplicada (eje espectral ya corregido).")
         return 0.0
     print(f"  Corrección heliocentrica aplicada: vhelio = {vhelio_raw:.4f} km/s")
     return vhelio_raw
 
 
-
-def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windowed=False,
-                  start_mode=None):
+def plot_spectrum(
+    wavelength,
+    flux,
+    filename,
+    header,
+    params_dict=None,
+    is_windowed=False,
+    start_mode=None,
+):
     """
     Visualizador interactivo principal del espectro.
 
@@ -1513,18 +1730,25 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
 
     # Estado persistente entre sesiones.
     # Se usan listas de un elemento para permitir mutacion desde closures anidados.
-    current = [wavelength, flux]  # espectro actualmente visible (puede ser recortado/normalizado)
-    is_normalized = [False]       # True si current[1] es el resultado de una normalizacion
-    is_windowed = [is_windowed]   # True si el espectro esta recortado (incluye --window inicial)
+    current = [
+        wavelength,
+        flux,
+    ]  # espectro actualmente visible (puede ser recortado/normalizado)
+    is_normalized = [False]  # True si current[1] es el resultado de una normalizacion
+    is_windowed = [
+        is_windowed
+    ]  # True si el espectro esta recortado (incluye --window inicial)
 
     def make_title():
         """Genera el titulo de la figura reflejando el estado actual."""
-        norm_tag   = ' (norm)' if is_normalized[0] else ''
-        window_tag = ' (crop)' if is_windowed[0] else ''
+        norm_tag = " (norm)" if is_normalized[0] else ""
+        window_tag = " (crop)" if is_windowed[0] else ""
         if is_windowed[0]:
-            return (f'Spectrum{window_tag}{norm_tag}: {os.path.basename(filename)}'
-                    f' [{current[0][0]:.1f} - {current[0][-1]:.1f} A]')
-        return f'Spectrum{norm_tag}: {os.path.basename(filename)}'
+            return (
+                f"Spectrum{window_tag}{norm_tag}: {os.path.basename(filename)}"
+                f" [{current[0][0]:.1f} - {current[0][-1]:.1f} A]"
+            )
+        return f"Spectrum{norm_tag}: {os.path.basename(filename)}"
 
     def save_current(prompt=False):
         """
@@ -1541,22 +1765,26 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             que guardar, retorna silenciosamente sin preguntar.
         """
         base, ext = os.path.splitext(os.path.basename(filename))
-        suffix = ('_crop' if is_windowed[0] else '') + ('_norm' if is_normalized[0] else '')
+        suffix = ("_crop" if is_windowed[0] else "") + (
+            "_norm" if is_normalized[0] else ""
+        )
         if not suffix:
             if not prompt:
                 print("  Nada que guardar: el espectro no esta cortado ni normalizado")
             return
         out_path = base + suffix + ext
         if prompt:
-            respuesta = input(f"\n  Guardar espectro como {os.path.basename(out_path)}? [S/n/nombre]: ").strip()
-            if respuesta.lower() in ('n', 'no'):
+            respuesta = input(
+                f"\n  Guardar espectro como {os.path.basename(out_path)}? [S/n/nombre]: "
+            ).strip()
+            if respuesta.lower() in ("n", "no"):
                 return
-            if respuesta and respuesta.lower() not in ('s', 'si', 'y', 'yes'):
+            if respuesta and respuesta.lower() not in ("s", "si", "y", "yes"):
                 out_path = respuesta
         try:
             save_spectrum_fits(out_path, header, current[0], current[1])
             print(f"  Guardado: {out_path}")
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"  Error al guardar: {e}")
 
     def run_session():
@@ -1573,15 +1801,15 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
 
         def setup_ax(wl, fl, title):
             """Dibuja el espectro y configura ejes, grilla y limites iniciales."""
-            ax.plot(wl, fl, 'k-', linewidth=1.5, label='Spectrum')
-            ax.set_xlabel('Wavelength (A)', fontsize=12)
-            ax.set_ylabel('Flux', fontsize=12)
-            ax.set_title(title, fontsize=14, fontweight='bold')
-            ax.grid(True, alpha=0.3, linestyle='--')
-            ax.axhline(y=0, color='gray', linestyle=':', alpha=0.5)
+            ax.plot(wl, fl, "k-", linewidth=1.5, label="Spectrum")
+            ax.set_xlabel("Wavelength (A)", fontsize=12)
+            ax.set_ylabel("Flux", fontsize=12)
+            ax.set_title(title, fontsize=14, fontweight="bold")
+            ax.grid(True, alpha=0.3, linestyle="--")
+            ax.axhline(y=0, color="gray", linestyle=":", alpha=0.5)
             ax.set_ylim(*calculate_smart_ylimits(fl))
             ax.set_xlim(wl[0], wl[-1])
-            ax.legend(loc='best')
+            ax.legend(loc="best")
 
         def refresh_toolbar():
             """
@@ -1589,14 +1817,14 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             Necesario despues de cambiar los datos de la linea con set_data(),
             para que el boton 'home' refleje el nuevo rango en lugar del original.
             """
-            if hasattr(fig.canvas, 'toolbar') and fig.canvas.toolbar is not None:
+            if hasattr(fig.canvas, "toolbar") and fig.canvas.toolbar is not None:
                 fig.canvas.toolbar.update()
 
         setup_ax(wl, fl, make_title())
         fig.tight_layout()
 
         window_limits = [None, None]  # [xmin, xmax] de la ventana pendiente de aplicar
-        span_selector = [None]        # widget SpanSelector activo para definir ventana
+        span_selector: list[SpanSelector | None] = [None]  # widget SpanSelector activo para definir ventana
 
         def onselect_window(xmin, xmax):
             """Callback del SpanSelector: registra los limites de la ventana seleccionada."""
@@ -1620,11 +1848,13 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             window_limits[0] = None
             window_limits[1] = None
             span_selector[0] = SpanSelector(
-                ax, onselect_window, 'horizontal',
+                ax,
+                onselect_window,
+                "horizontal",
                 useblit=True,
-                props=dict(alpha=0.3, facecolor='blue'),
+                props={"alpha": 0.3, "facecolor": "blue"},
                 interactive=True,
-                drag_from_anywhere=True
+                drag_from_anywhere=True,
             )
             print("\n  Modo ventana activado: click y arrastra para definir el rango")
             print("  Presiona Enter para aplicar, 'w' para redefinir")
@@ -1666,13 +1896,15 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
 
             # Actualizar la linea en lugar de limpiar el eje, para preservar el resto del plot
             ax.lines[0].set_data(wl_window, fl_window)
-            ax.set_title(make_title(), fontsize=14, fontweight='bold')
+            ax.set_title(make_title(), fontsize=14, fontweight="bold")
             ax.set_ylim(*calculate_smart_ylimits(fl_window))
             ax.set_xlim(xmin, xmax)
             is_windowed[0] = True
             refresh_toolbar()
             fig.canvas.draw_idle()
-            print(f"\n  Recorte aplicado: [{xmin:.2f}, {xmax:.2f}] A  ({len(wl_window)} puntos)")
+            print(
+                f"\n  Recorte aplicado: [{xmin:.2f}, {xmax:.2f}] A  ({len(wl_window)} puntos)"
+            )
 
         def reset_view():
             """
@@ -1683,7 +1915,7 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             current[0] = wavelength
             current[1] = flux
             ax.lines[0].set_data(wavelength, flux)
-            ax.set_title(make_title(), fontsize=14, fontweight='bold')
+            ax.set_title(make_title(), fontsize=14, fontweight="bold")
             ax.set_ylim(*calculate_smart_ylimits(flux))
             ax.set_xlim(wavelength[0], wavelength[-1])
             refresh_toolbar()
@@ -1699,40 +1931,40 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
 
         def on_key(event):
             """Despacha los eventos de teclado a las funciones correspondientes."""
-            if event.key.lower() == 'q':
-                close_session('quit')
-            elif event.key.lower() == 'w':
+            if event.key.lower() == "q":
+                close_session("quit")
+            elif event.key.lower() == "w":
                 activate_window_mode()
-            elif event.key == 'enter':
+            elif event.key == "enter":
                 apply_window()
-            elif event.key.lower() == 'z':
+            elif event.key.lower() == "z":
                 reset_view()
-            elif event.key.lower() == 'n':
-                close_session('normalize')
-            elif event.key.lower() == 'd':
-                close_session('fit_gaussians')
-            elif event.key.lower() == 'x':
+            elif event.key.lower() == "n":
+                close_session("normalize")
+            elif event.key.lower() == "d":
+                close_session("fit_gaussians")
+            elif event.key.lower() == "x":
                 save_current()
-            elif event.key.lower() == 'h':
-                print("\n" + "="*50)
+            elif event.key.lower() == "h":
+                print("\n" + "=" * 50)
                 print("HEADER")
-                print("="*50)
+                print("=" * 50)
                 print(repr(header))
-                print("="*50)
+                print("=" * 50)
 
         def on_scroll(event):
             if event.inaxes != ax:
                 return
-            factor = 0.85 if event.button == 'up' else 1.0 / 0.85
+            factor = 0.85 if event.button == "up" else 1.0 / 0.85
             xmin, xmax = ax.get_xlim()
             xc = event.xdata
             ax.set_xlim(xc + (xmin - xc) * factor, xc + (xmax - xc) * factor)
             fig.canvas.draw_idle()
 
-        fig.canvas.mpl_connect('key_press_event', on_key)
-        fig.canvas.mpl_connect('scroll_event', on_scroll)
+        fig.canvas.mpl_connect("key_press_event", on_key)
+        fig.canvas.mpl_connect("scroll_event", on_scroll)
 
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("INSTRUCTIONS:")
         print("  q         cerrar")
         print("  w         definir ventana de corte (click y drag)")
@@ -1747,12 +1979,12 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
         print("  o         modo zoom (arrastrar para seleccionar)")
         print("  scroll    zoom in/out")
         print("  home      reset vista")
-        print("="*50)
+        print("=" * 50)
 
         plt.show()
 
         # La figura ya cerro: ahora es seguro usar input()
-        if pending[0] == 'quit':
+        if pending[0] == "quit":
             save_current(prompt=True)
             return None
 
@@ -1763,13 +1995,13 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
     # entre iteraciones sin necesidad de recursion.
     # Si start_mode esta definido, se salta la sesion principal y se entra
     # directamente al modo indicado, saliendo al terminar sin reabrir la viz.
-    if start_mode in ('normalize', 'fit_gaussians'):
+    if start_mode in ("normalize", "fit_gaussians"):
         action = start_mode
     else:
         action = run_session()
 
     while True:
-        if action == 'normalize':
+        if action == "normalize":
             norm_fl = interactive_normalization(current[0], current[1], filename)
             if norm_fl is not None:
                 current[1] = norm_fl
@@ -1782,15 +2014,21 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
             if start_mode is not None:
                 save_current(prompt=True)
                 break
-        elif action == 'fit_gaussians':
-            fit_result = interactive_gaussian_fitting(current[0], current[1], filename, params_dict, vhelio)
+        elif action == "fit_gaussians":
+            fit_result = interactive_gaussian_fitting(
+                current[0], current[1], filename, params_dict, vhelio
+            )
             if fit_result is not None:
                 high_vr = _print_vr_summary(fit_result, vhelio)
                 if high_vr:
-                    print(f"\n  Aviso: una o mas velocidades radiales superan "
-                          f"{VR_WARNING_THRESHOLD:.0f} km/s.")
-                    continuar = input("  Continuar con el guardado? [s/N]: ").strip().lower()
-                    if continuar not in ('s', 'si', 'y', 'yes'):
+                    print(
+                        f"\n  Aviso: una o mas velocidades radiales superan "
+                        f"{VR_WARNING_THRESHOLD:.0f} km/s."
+                    )
+                    continuar = (
+                        input("  Continuar con el guardado? [s/N]: ").strip().lower()
+                    )
+                    if continuar not in ("s", "si", "y", "yes"):
                         if start_mode is None:
                             print("  Reabriendo visualizacion.")
                             action = run_session()
@@ -1799,51 +2037,75 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
                             break
             if fit_result is not None and hjd_value is not None:
                 # Usar el nombre de la linea identificada como default del CSV
-                linename = 'line'
-                if 'g1_center' in fit_result.params:
+                linename = "line"
+                if "g1_center" in fit_result.params:
                     try:
-                        line_info = find_closest_line(fit_result.params['g1_center'].value)
-                        linename = line_info.get('name', linename)
+                        line_info = find_closest_line(
+                            fit_result.params["g1_center"].value
+                        )
+                        linename = line_info.get("name", linename)
                         if len(linename) > 4:
                             linename = linename[-4:]
-                    except Exception:
+                    except (ValueError, KeyError):
                         pass
                 default_csv = f"fitted_{linename}.csv"
                 if not fit_result.success:
                     # Comprobar si algun centro esta en el limite
                     j = 1
                     center_bad = False
-                    while f'g{j}_center' in fit_result.params:
-                        p = fit_result.params[f'g{j}_center']
-                        at_min = p.min is not None and abs(p.value - p.min) < 1e-6 * (abs(p.min) + 1)
-                        at_max = p.max is not None and abs(p.value - p.max) < 1e-6 * (abs(p.max) + 1)
+                    while f"g{j}_center" in fit_result.params:
+                        p = fit_result.params[f"g{j}_center"]
+                        at_min = p.min is not None and abs(p.value - p.min) < 1e-6 * (
+                            abs(p.min) + 1
+                        )
+                        at_max = p.max is not None and abs(p.value - p.max) < 1e-6 * (
+                            abs(p.max) + 1
+                        )
                         if at_min or at_max:
                             center_bad = True
                             break
                         j += 1
                     if center_bad:
-                        print("\n" + "!"*60)
-                        print("  *** ADVERTENCIA: el ajuste FALLO y el/los CENTRO/S estan")
-                        print("      en el limite del rango -- los parametros son INVALIDOS ***")
-                        print("!"*60)
-                        save = input(f"  Guardar igualmente en {default_csv}? [s/N/nombre]: ").strip()
+                        print("\n" + "!" * 60)
+                        print(
+                            "  *** ADVERTENCIA: el ajuste FALLO y el/los CENTRO/S estan"
+                        )
+                        print(
+                            "      en el limite del rango -- los parametros son INVALIDOS ***"
+                        )
+                        print("!" * 60)
+                        save = input(
+                            f"  Guardar igualmente en {default_csv}? [s/N/nombre]: "
+                        ).strip()
                         if not save:
-                            save = 'n'
+                            save = "n"
                     else:
-                        print("\n  AVISO: el ajuste no convergio (success=False). Los parametros pueden ser incorrectos.")
-                        save = input(f"  Guardar de todas formas en {default_csv}? [s/N/nombre]: ").strip()
+                        print(
+                            "\n  AVISO: el ajuste no convergio (success=False). Los parametros pueden ser incorrectos."
+                        )
+                        save = input(
+                            f"  Guardar de todas formas en {default_csv}? [s/N/nombre]: "
+                        ).strip()
                         if not save:
-                            save = 'n'
+                            save = "n"
                 else:
-                    save = input(f"\n  Guardar parametros del ajuste en CSV como {default_csv}? [S/n/nombre]: ").strip()
-                if save.lower() not in ('n', 'no'):
-                    if save and save.lower() not in ('s', 'si', 'y', 'yes'):
+                    save = input(
+                        f"\n  Guardar parametros del ajuste en CSV como {default_csv}? [S/n/nombre]: "
+                    ).strip()
+                if save.lower() not in ("n", "no"):
+                    if save and save.lower() not in ("s", "si", "y", "yes"):
                         csv_out = save
                     else:
                         csv_out = default_csv
                     save_vhelio = _prompt_vhelio_correction(header)
-                    save_fit_to_csv(filename, linename, hjd_value, save_vhelio, fit_result,
-                                    csv_filename=csv_out)
+                    save_fit_to_csv(
+                        filename,
+                        linename,
+                        hjd_value,
+                        save_vhelio,
+                        fit_result,
+                        csv_filename=csv_out,
+                    )
             elif fit_result is not None and hjd_value is None:
                 print("  Aviso: no se puede guardar sin HJD en el header.")
             if start_mode is not None:
@@ -1855,17 +2117,32 @@ def plot_spectrum(wavelength, flux, filename, header, params_dict=None, is_windo
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Interactive spectrum analyzer')
-    parser.add_argument('filename', help='FITS spectrum file')
-    parser.add_argument('--window', type=float, nargs=2, metavar=('WMIN', 'WMAX'),
-                        help='Wavelength window to display: WMIN WMAX (A)')
-    parser.add_argument('--params', type=str, metavar='FILE',
-                        help='JSON file with Gaussian fit parameters')
+    parser = argparse.ArgumentParser(description="Interactive spectrum analyzer")
+    parser.add_argument("filename", help="FITS spectrum file")
+    parser.add_argument(
+        "--window",
+        type=float,
+        nargs=2,
+        metavar=("WMIN", "WMAX"),
+        help="Wavelength window to display: WMIN WMAX (A)",
+    )
+    parser.add_argument(
+        "--params",
+        type=str,
+        metavar="FILE",
+        help="JSON file with Gaussian fit parameters",
+    )
     mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument('--normalized', action='store_true',
-                            help='Entrar directamente en modo normalizacion y salir al terminar')
-    mode_group.add_argument('--gaussian', action='store_true',
-                            help='Entrar directamente en modo ajuste de gaussianas y salir al terminar')
+    mode_group.add_argument(
+        "--normalized",
+        action="store_true",
+        help="Entrar directamente en modo normalizacion y salir al terminar",
+    )
+    mode_group.add_argument(
+        "--gaussian",
+        action="store_true",
+        help="Entrar directamente en modo ajuste de gaussianas y salir al terminar",
+    )
 
     args = parser.parse_args()
 
@@ -1873,9 +2150,12 @@ def main():
         _load_heavy_imports()
     except ImportError as e:
         print(f"Error: falta el paquete '{e.name}'.", file=sys.stderr)
-        print("Verifica que el entorno (conda/virtualenv) correcto este activado "
-              "con todas las dependencias instaladas (matplotlib, scipy, astropy, "
-              "specutils, lmfit, etc.).", file=sys.stderr)
+        print(
+            "Verifica que el entorno (conda/virtualenv) correcto este activado "
+            "con todas las dependencias instaladas (matplotlib, scipy, astropy, "
+            "specutils, lmfit, etc.).",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     is_windowed = False
@@ -1894,22 +2174,29 @@ def main():
     params_dict = None
     if args.params:
         try:
-            with open(args.params, 'r') as f:
+            with open(args.params, "r") as f:
                 params_dict = json.load(f)
-            n = sum(1 for k in params_dict if k.startswith('g') and '_center' in k)
+            n = sum(1 for k in params_dict if k.startswith("g") and "_center" in k)
             print(f"  Parametros cargados desde {args.params} ({n} gaussiana(s)).")
-        except Exception as e:
+        except (OSError, ValueError, TypeError) as e:
             print(f"  Error al cargar {args.params}: {e}")
             sys.exit(1)
 
     start_mode = None
     if args.normalized:
-        start_mode = 'normalize'
+        start_mode = "normalize"
     elif args.gaussian:
-        start_mode = 'fit_gaussians'
+        start_mode = "fit_gaussians"
 
-    plot_spectrum(wavelength, flux, args.filename, header, params_dict,
-                 is_windowed=is_windowed, start_mode=start_mode)
+    plot_spectrum(
+        wavelength,
+        flux,
+        args.filename,
+        header,
+        params_dict,
+        is_windowed=is_windowed,
+        start_mode=start_mode,
+    )
 
 
 if __name__ == "__main__":

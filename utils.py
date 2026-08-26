@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """
 utils.py — Utilidades para lectura, procesamiento y ajuste de espectros estelares.
 
@@ -21,23 +20,21 @@ Clases
 ------
 spectrum : Contenedor ligero de espectro (wavelength, flux, header) con método de guardado.
 """
+import logging
 import os
-import shutil
+import warnings
 
+import astropy.units as u
 import numpy as np
 import pandas as pd
 from astropy.io import fits
+from astropy.io.fits.verify import VerifyWarning
 from astropy.io.votable import parse as parse_votable
-import logging
-
+from astropy.modeling.fitting import FittingWithOutlierRemoval, LinearLSQFitter
+from astropy.modeling.polynomial import Chebyshev1D, Legendre1D
 from astropy.stats import sigma_clip
-import astropy.units as u
-from astropy.modeling.polynomial import Legendre1D, Chebyshev1D
-from astropy.modeling.fitting import LinearLSQFitter, FittingWithOutlierRemoval
 from specutils import Spectrum
 from specutils.manipulation import FluxConservingResampler
-import warnings
-from astropy.io.fits.verify import VerifyWarning
 
 warnings.simplefilter('ignore', category=VerifyWarning)
 logger = logging.getLogger(__name__)
@@ -98,13 +95,13 @@ def read_fits_simple(file_name):
 
     with fits.open(file_name) as hdul:
         hdul[0].verify('fix')
-        header = hdul[0].header
+        header = hdul[0].header  # type: ignore[reportAttributeAccessIssue]
 
         if header.get('CTYPE1') == 'MULTISPE':
             raise ValueError("This spectrum is MULTISPEC")
 
         if header.get('PROCSPEC') == 'spec.py':
-            return header, _wave_from_header(header), hdul[0].data
+            return header, _wave_from_header(header), hdul[0].data  # type: ignore[reportAttributeAccessIssue]
 
         # PARA ESPECTROS SALIDA DE UNWIND
         if 'COMP' in header:
@@ -114,33 +111,33 @@ def read_fits_simple(file_name):
         # Buscar header con INSTRUME en extensiones si no está en la primaria
         if 'INSTRUME' not in header:
             for ext in hdul[1:]:
-                if 'INSTRUME' in ext.header:
-                    header = ext.header
+                if 'INSTRUME' in ext.header:  # type: ignore[reportAttributeAccessIssue]
+                    header = ext.header  # type: ignore[reportAttributeAccessIssue]
                     break
 
-        primary_data = hdul[0].data
+        primary_data = hdul[0].data  # type: ignore[reportAttributeAccessIssue]
 
         if primary_data is None:
             # Sin datos en la primaria → bintable en extensión, WCS como fallback
             try:
                 wave, flux = _read_bintable(hdul)
                 return header, wave, flux
-            except Exception:
+            except (KeyError, ValueError, OSError):
                 pass
             try:
-                return header, _wave_from_header(header), hdul[0].data
-            except Exception:
+                return header, _wave_from_header(header), hdul[0].data  # type: ignore[reportAttributeAccessIssue]
+            except (KeyError, ValueError, OSError):
                 pass
         else:
             # Datos en la primaria → WCS primero, bintable como fallback
             try:
                 return header, _wave_from_header(header), primary_data
-            except Exception:
+            except (KeyError, ValueError, OSError):
                 pass
             try:
                 wave, flux = _read_bintable(hdul)
                 return header, wave, flux
-            except Exception:
+            except (KeyError, ValueError, OSError):
                 pass
 
         raise ValueError(f"No se pudo leer '{file_name}': ni bintable ni WCS funcionaron")
@@ -224,7 +221,7 @@ def read_votable(file_name, spectral_col='spectral', flux_col='flux'):
         key = param.name.upper()[:8]
         try:
             header[key] = param.value
-        except Exception:
+        except (ValueError, TypeError):
             pass
 
     return header, wavelength, flux
@@ -288,8 +285,8 @@ def read_fits_multi(file_name, extension=None):
             # Obtener datos y header
             hdu = hdul[extension]
             hdu.verify('fix')  # Corregir problemas de FITS si es necesario
-            header = hdu.header
-            data = hdu.data
+            header = hdu.header  # type: ignore[reportAttributeAccessIssue]
+            data = hdu.data  # type: ignore[reportAttributeAccessIssue]
             
             # Verificar que hay datos
             if data is None:
@@ -412,7 +409,7 @@ def read_fits_multi(file_name, extension=None):
                 
                 # Manejar datos multibanda
                 if nbands > 1:
-                    logger.info(f"Datos multibanda detectados, usando la primera banda")
+                    logger.info("Datos multibanda detectados, usando la primera banda")
                     data = data[0]
                 
                 return header, wavelen, data
@@ -420,8 +417,8 @@ def read_fits_multi(file_name, extension=None):
             except (KeyError, ValueError) as e:
                 logger.error(f"Error procesando archivo: {e}")
                 raise
-            except Exception as e:
-                logger.error(f"Error inesperado: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Error inesperado")
                 raise
             
     except FileNotFoundError:
@@ -434,10 +431,10 @@ def read_fits_multi(file_name, extension=None):
         raise
     except Exception as e:
         error_msg = f"Error inesperado al procesar {file_name}: {e}"
-        logger.error(error_msg, exc_info=True)
+        logger.exception(error_msg)
         raise
             
-def mask_generator(wavelength, ranges, inclusive=True):
+def mask_generator(wavelength, ranges, inclusive: bool | tuple[bool, bool] = True):
     """
     Genera una máscara booleana con control sobre inclusividad de extremos.
 
@@ -542,7 +539,7 @@ def fit_cont(wavelength, flux, model=None, order=2, exclude=None):
     return cont_fit, excl_pts
 
 def fit_cont_sigma(wavelength, flux, model=None, order=2, exclude=None,
-                    use_sigma_clip=False, sigma_lower=None, sigma_upper=None, niter=5):
+                    use_sigma_clip=False, sigma_lower=None, sigma_upper=None, niter=5) -> tuple:
     """
     Ejecuta un ajuste de curva de continuo utilizando diferentes modelos,
     con opción de sigma clipping para eliminar outliers.
@@ -702,7 +699,7 @@ def fit_lines(wavelength, flux, params=None):
     
     # Crear lista de gaussianas basada en los parámetros
     gaussian_params = {}
-    for key in params.keys():
+    for key in params:
         if key.startswith('g') and '_' in key:
             # Extraer número de gaussiana y tipo de parámetro
             parts = key.split('_')
@@ -738,7 +735,8 @@ def fit_lines(wavelength, flux, params=None):
     
     # Crear modelo base (fondo lineal: bkg_intercept + bkg_slope * x)
     model = LinearModel(prefix='bkg_')
-    
+    pars = model.make_params()
+
     # Añadir gaussianas dinámicamente
     for i in range(1, n_gauss + 1):
         prefix = f'g{i}_'
@@ -827,6 +825,9 @@ def fit_lines(wavelength, flux, params=None):
     
     return result
         
+_fluxcon_cache = None
+
+
 def resampler(wavelength, flux, resampler_pars):
     """
     Resample spectrum using flux-conserving resampling.
@@ -854,10 +855,11 @@ def resampler(wavelength, flux, resampler_pars):
     spec = Spectrum(flux=flux * u.adu, spectral_axis=wavelength * u.AA)
     
     # Use singleton resampler to avoid recreation
-    if not hasattr(resampler, '_fluxcon'):
-        resampler._fluxcon = FluxConservingResampler(extrapolation_treatment='nan_fill')
+    global _fluxcon_cache
+    if _fluxcon_cache is None:
+        _fluxcon_cache = FluxConservingResampler(extrapolation_treatment='nan_fill')
     
-    return resampler._fluxcon(spec, new_wavelength).flux.value
+    return _fluxcon_cache(spec, new_wavelength).flux.value
 
 def concat_flux(flux_matrix):
     """
@@ -943,8 +945,7 @@ def concat_flux(flux_matrix):
                     # Puntos antes del gap (hasta 3 puntos)
                     for offset in [-3, -2, -1]:
                         idx = before_idx + offset
-                        if 0 <= idx < n_pixels and not nan_mask[idx]:
-                            if idx not in x_points:  # Evitar duplicados
+                        if 0 <= idx < n_pixels and not nan_mask[idx] and idx not in x_points:  # Evitar duplicados
                                 x_points.append(idx)
                                 y_points.append(flux_combined[idx])
                     
@@ -961,8 +962,7 @@ def concat_flux(flux_matrix):
                     # Puntos después del gap (hasta 3 puntos)
                     for offset in [1, 2, 3]:
                         idx = after_idx + offset
-                        if 0 <= idx < n_pixels and not nan_mask[idx]:
-                            if idx not in x_points:  # Evitar duplicados
+                        if 0 <= idx < n_pixels and not nan_mask[idx] and idx not in x_points:  # Evitar duplicados
                                 x_points.append(idx)
                                 y_points.append(flux_combined[idx])
                     
@@ -980,7 +980,7 @@ def concat_flux(flux_matrix):
                                 spline = interpolate.CubicSpline(x_points, y_points)
                                 flux_combined[segment] = spline(segment)
                                 continue  # Gap interpolado, siguiente segmento
-                            except:
+                            except ValueError:
                                 pass  # Fallback a métodos más simples
                         
                         # Interpolación cuadrática si tenemos 3 puntos
@@ -990,14 +990,14 @@ def concat_flux(flux_matrix):
                                 poly_func = np.poly1d(poly)
                                 flux_combined[segment] = poly_func(segment)
                                 continue
-                            except:
+                            except ValueError:
                                 pass  # Fallback a lineal
                         
                         # Interpolación lineal (mínimo 2 puntos)
                         interp_func = interpolate.interp1d(
                             x_points, y_points,
                             kind='linear',
-                            fill_value='extrapolate'
+                            fill_value='extrapolate'  # type: ignore[reportArgumentType]
                         )
                         flux_combined[segment] = interp_func(segment)
         
@@ -1013,7 +1013,7 @@ def concat_flux(flux_matrix):
                     good_indices,
                     flux_combined[good_indices],
                     kind='linear',
-                    fill_value='extrapolate',
+                    fill_value='extrapolate',  # type: ignore[reportArgumentType]
                     bounds_error=False
                 )
                 
@@ -1051,8 +1051,8 @@ def save_concat_fits(filename, header, wavelength, flux):
     La escala de longitudes de onda se almacena como log10 (CRVAL1/CDELT1)
     con el flag ``DC-FLAG=1``.
     """
-    from astropy.io import fits
     import numpy as np
+    from astropy.io import fits
     
     # Crear una copia del header original
     new_header = header.copy()
@@ -1508,7 +1508,7 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=
             data_dict[f'line{i}_lambda0'] = [f"{lambda0:.4f}"]
             data_dict[f'vr{i}']           = [f"{vr_val:.4f}"]
             data_dict[f'vr{i}_err']       = [f"{vr_err_val:.4f}" if not np.isnan(vr_err_val) else ""]
-        except Exception:
+        except (ValueError, KeyError):
             data_dict[f'line{i}_name']    = [""]
             data_dict[f'line{i}_lambda0'] = [""]
             data_dict[f'vr{i}']           = [""]
@@ -1571,7 +1571,7 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=
             pd.concat([df_existing, df_new], ignore_index=True).to_csv(csv_filename, index=False)
             print(f"  Fila agregada a {csv_filename}")
 
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"  Error leyendo CSV existente: {e}. Creando nuevo archivo.")
             df_new.to_csv(csv_filename, index=False)
             print(f"  Creado: {csv_filename}")
@@ -1579,7 +1579,7 @@ def save_fit_to_csv(filename, linename, hjd_value, vhelio, result, csv_filename=
         df_new.to_csv(csv_filename, index=False)
         print(f"  Creado: {csv_filename}")
 
-    print(f"\n  Resumen guardado:")
+    print("\n  Resumen guardado:")
     print(f"    Archivo:    {os.path.basename(filename)}")
     print(f"    HJD:        {hjd_value:.10f}")
     print(f"    Gaussianas: {n_gauss}")
