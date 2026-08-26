@@ -1869,7 +1869,14 @@ def main():
 
     args = parser.parse_args()
 
-    _load_heavy_imports()
+    try:
+        _load_heavy_imports()
+    except ImportError as e:
+        print(f"Error: falta el paquete '{e.name}'.", file=sys.stderr)
+        print("Verifica que el entorno (conda/virtualenv) correcto este activado "
+              "con todas las dependencias instaladas (matplotlib, scipy, astropy, "
+              "specutils, lmfit, etc.).", file=sys.stderr)
+        sys.exit(1)
 
     is_windowed = False
 

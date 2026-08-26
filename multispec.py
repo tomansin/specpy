@@ -14,6 +14,7 @@ Uso:
 import sys
 import os
 import argparse
+import json
 
 
 def _load_heavy_imports():
@@ -396,7 +397,7 @@ def save_multispec(out_path, header, all_fluxes):
 # ---------------------------------------------------------------------------
 
 def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=None,
-                   start_mode=None):
+                   start_mode=None, window=None, params_dict=None):
     """
     Visualizador interactivo para espectros MULTISPEC.
 
@@ -417,6 +418,11 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
         Si es 'normalize' o 'fit_gaussians', entra directamente en ese modo
         para el orden activo (sin mostrar primero el visualizador principal)
         y sale al terminar sin reabrirlo.
+    window : (float, float) or None
+        Rango de longitud de onda WMIN WMAX (A) para recortar el orden
+        inicial al abrir el visualizador.
+    params_dict : dict o None
+        Parametros de ajuste de gaussianas cargados desde JSON (ver --params).
     """
     norders = all_wavelengths.shape[0]
     norm_fluxes = {}          # {order_idx: norm_flux}
@@ -434,6 +440,19 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
     current = [all_wavelengths[idx0].copy(), all_fluxes[idx0].copy()]
     is_normalized = [False]
     is_windowed = [False]
+
+    if window is not None:
+        wmin, wmax = window
+        mask = (current[0] >= wmin) & (current[0] <= wmax)
+        if np.any(mask):
+            current[0] = current[0][mask]
+            current[1] = current[1][mask]
+            is_windowed[0] = True
+            print(f"  Window aplicada: [{wmin:.2f}, {wmax:.2f}] A "
+                  f"(orden {idx0 + 1})")
+        else:
+            print(f"  WARNING: ventana [{wmin:.2f}, {wmax:.2f}] A sin datos "
+                  f"en el orden {idx0 + 1}.")
 
     hjd_value = None
     for key in HJD_KEYS:
@@ -673,7 +692,7 @@ def plot_multispec(all_wavelengths, all_fluxes, filename, header, start_order=No
 
         elif action == 'fit_gaussians':
             fit_result = interactive_gaussian_fitting(
-                current[0], current[1], filename, None, vhelio)
+                current[0], current[1], filename, params_dict, vhelio)
             if fit_result is not None:
                 high_vr = _print_vr_summary(fit_result, vhelio)
                 if high_vr:
@@ -717,6 +736,10 @@ def main():
     parser.add_argument('filename', help='Archivo FITS MULTISPEC')
     parser.add_argument('-o', '--order', type=int, default=None,
                         help='Numero de orden (1-indexado) con el que abrir el visualizador')
+    parser.add_argument('--window', type=float, nargs=2, metavar=('WMIN', 'WMAX'),
+                        help='Wavelength window a aplicar al orden inicial: WMIN WMAX (A)')
+    parser.add_argument('--params', type=str, metavar='FILE',
+                        help='JSON file with Gaussian fit parameters')
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('--normalized', action='store_true',
                             help='Entrar directamente en modo normalizacion (orden activo) y salir al terminar')
@@ -724,11 +747,29 @@ def main():
                             help='Entrar directamente en modo ajuste de gaussianas (orden activo) y salir al terminar')
     args = parser.parse_args()
 
-    _load_heavy_imports()
+    try:
+        _load_heavy_imports()
+    except ImportError as e:
+        print(f"Error: falta el paquete '{e.name}'.", file=sys.stderr)
+        print("Verifica que el entorno (conda/virtualenv) correcto este activado "
+              "con todas las dependencias instaladas (matplotlib, scipy, astropy, "
+              "specutils, lmfit, etc.).", file=sys.stderr)
+        sys.exit(1)
 
     header, all_wavelengths, all_fluxes = load_multispec(args.filename)
     if all_wavelengths is None:
         sys.exit(1)
+
+    params_dict = None
+    if args.params:
+        try:
+            with open(args.params, 'r') as f:
+                params_dict = json.load(f)
+            n = sum(1 for k in params_dict if k.startswith('g') and '_center' in k)
+            print(f"  Parametros cargados desde {args.params} ({n} gaussiana(s)).")
+        except Exception as e:
+            print(f"  Error al cargar {args.params}: {e}")
+            sys.exit(1)
 
     start_mode = None
     if args.normalized:
@@ -737,7 +778,8 @@ def main():
         start_mode = 'fit_gaussians'
 
     plot_multispec(all_wavelengths, all_fluxes, args.filename, header,
-                   start_order=args.order, start_mode=start_mode)
+                   start_order=args.order, start_mode=start_mode, window=args.window,
+                   params_dict=params_dict)
 
 
 if __name__ == "__main__":
